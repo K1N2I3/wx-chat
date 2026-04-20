@@ -179,7 +179,7 @@ export function ChatApp() {
                 ? "连接中…"
                 : status === "error"
                   ? "连接异常"
-                  : "未连接"}
+                  : "未进入房间"}
           </span>
         </header>
 
