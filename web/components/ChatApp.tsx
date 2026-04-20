@@ -1,11 +1,6 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
 const TOKEN_KEY = "wx_token";
@@ -29,9 +24,31 @@ type UiMessage = {
   fromLabel?: string;
 };
 
+type PeerPreview = { text: string; ts: number };
+
 function avatarChar(name: string) {
   const t = name.trim();
   return t ? t[0].toUpperCase() : "?";
+}
+
+function formatListTime(ts: number) {
+  const d = new Date(ts);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  if (sameDay) {
+    return d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const ySame =
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate();
+  if (ySame) return `昨天 ${d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+  return d.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
 }
 
 async function api<T>(
@@ -50,6 +67,47 @@ async function api<T>(
   return data as T;
 }
 
+function IconChat() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconContacts() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function IconLeave() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function ChatApp() {
   const apiBase = process.env.NEXT_PUBLIC_SOCKET_URL?.replace(/\/$/, "") || "";
 
@@ -65,6 +123,9 @@ export function ChatApp() {
   const [incoming, setIncoming] = useState<IncomingReq[]>([]);
   const [addTarget, setAddTarget] = useState("");
   const [addMsg, setAddMsg] = useState<string | null>(null);
+  const [listSearch, setListSearch] = useState("");
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const [peerPreview, setPeerPreview] = useState<Record<string, PeerPreview>>({});
 
   const [selected, setSelected] = useState<Friend | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -76,6 +137,12 @@ export function ChatApp() {
   const selectedRef = useRef<Friend | null>(null);
   const meRef = useRef<PublicUser | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  const bumpPreview = useCallback((peerId: string, text: string) => {
+    const t = text.trim().slice(0, 36);
+    if (!t) return;
+    setPeerPreview((p) => ({ ...p, [peerId]: { text: t, ts: Date.now() } }));
+  }, []);
 
   useEffect(() => {
     try {
@@ -94,14 +161,19 @@ export function ChatApp() {
   }, []);
 
   useEffect(() => {
+    document.documentElement.classList.toggle("wxd-full", screen === "main");
+    return () => document.documentElement.classList.remove("wxd-full");
+  }, [screen]);
+
+  useEffect(() => {
     if (!apiBase) return;
     fetch(`${apiBase}/health`)
       .then((r) => r.json())
       .then((d: { storage?: string }) => {
-        if (d.storage === "mongodb") setStorageHint("数据保存在 MongoDB");
-        else if (d.storage === "sqlite") setStorageHint("数据保存在服务器 SQLite 文件");
-        else if (d.storage === "postgres") setStorageHint("数据保存在 PostgreSQL");
-        else if (d.storage === "memory") setStorageHint("当前为内存模式，数据不持久");
+        if (d.storage === "mongodb") setStorageHint("MongoDB");
+        else if (d.storage === "sqlite") setStorageHint("SQLite");
+        else if (d.storage === "postgres") setStorageHint("PostgreSQL");
+        else if (d.storage === "memory") setStorageHint("内存");
       })
       .catch(() => setStorageHint(null));
   }, [apiBase]);
@@ -132,6 +204,7 @@ export function ChatApp() {
     setIncoming([]);
     setSelected(null);
     setMessages([]);
+    setPeerPreview({});
     setScreen("login");
     setSocketStatus("off");
   }, []);
@@ -170,32 +243,44 @@ export function ChatApp() {
     listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [messages]);
 
-  const joinDmRoom = useCallback((f: Friend) => {
-    const s = socketRef.current;
-    if (!s?.connected) return;
-    s.emit(
-      "join_dm",
-      { peerUserId: f.id },
-      (res: {
-        ok?: boolean;
-        history?: { id: string; text: string; ts: number; fromMe: boolean }[];
-      }) => {
-        if (!res?.ok) {
-          setMessages([]);
-          return;
+  useEffect(() => {
+    if (!selected || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    bumpPreview(selected.id, last.text);
+  }, [messages, selected?.id, bumpPreview, selected]);
+
+  const joinDmRoom = useCallback(
+    (f: Friend) => {
+      const s = socketRef.current;
+      if (!s?.connected) return;
+      s.emit(
+        "join_dm",
+        { peerUserId: f.id },
+        (res: {
+          ok?: boolean;
+          history?: { id: string; text: string; ts: number; fromMe: boolean }[];
+        }) => {
+          if (!res?.ok) {
+            setMessages([]);
+            return;
+          }
+          const hist = res.history || [];
+          setMessages(
+            hist.map((m) => ({
+              id: m.id,
+              text: m.text,
+              ts: m.ts,
+              fromMe: m.fromMe,
+              fromLabel: f.display_name,
+            }))
+          );
+          const last = hist[hist.length - 1];
+          if (last) bumpPreview(f.id, last.text);
         }
-        setMessages(
-          (res.history || []).map((m) => ({
-            id: m.id,
-            text: m.text,
-            ts: m.ts,
-            fromMe: m.fromMe,
-            fromLabel: f.display_name,
-          }))
-        );
-      }
-    );
-  }, []);
+      );
+    },
+    [bumpPreview]
+  );
 
   useEffect(() => {
     if (screen !== "main" || !token || !apiBase) return;
@@ -231,7 +316,13 @@ export function ChatApp() {
       }) => {
         const self = meRef.current;
         const sel = selectedRef.current;
-        if (!self || !sel) return;
+        if (!self) return;
+        if (payload.fromUserId !== self.id) {
+          bumpPreview(payload.fromUserId, payload.text);
+        } else if (sel) {
+          bumpPreview(sel.id, payload.text);
+        }
+        if (!sel) return;
         if (payload.fromUserId !== self.id && payload.fromUserId !== sel.id) return;
         setMessages((prev) => {
           if (prev.some((m) => m.id === payload.id)) return prev;
@@ -255,7 +346,7 @@ export function ChatApp() {
       socketRef.current = null;
       setSocketStatus("off");
     };
-  }, [screen, token, apiBase, joinDmRoom]);
+  }, [screen, token, apiBase, joinDmRoom, bumpPreview]);
 
   const openChat = useCallback(
     (f: Friend) => {
@@ -272,8 +363,9 @@ export function ChatApp() {
     const t = input.trim();
     if (!s || !selected || !t || !me) return;
     s.emit("dm_message", { peerUserId: selected.id, text: t }, () => {});
+    bumpPreview(selected.id, t);
     setInput("");
-  }, [input, selected, me]);
+  }, [input, selected, me, bumpPreview]);
 
   const onLogin = async () => {
     setFormErr(null);
@@ -357,15 +449,23 @@ export function ChatApp() {
     }
   };
 
+  const filteredFriends = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    if (!q) return friends;
+    return friends.filter(
+      (f) => f.username.toLowerCase().includes(q) || f.display_name.toLowerCase().includes(q)
+    );
+  }, [friends, listSearch]);
+
   if (!apiBase) {
     return (
-      <div className="wx-auth-page">
-        <div className="wx-auth-card">
-          <div className="wx-brand">
-            <div className="wx-brand-mark">微</div>
-            <h1>需要配置后端地址</h1>
+      <div className="wxd-auth-page">
+        <div className="wxd-auth-card">
+          <div className="wxd-auth-brand">
+            <div className="wxd-auth-logo">微</div>
+            <h1>需要配置后端</h1>
             <p>
-              在 Vercel 设置环境变量 <span className="wx-mono">NEXT_PUBLIC_SOCKET_URL</span>
+              在 Vercel 设置 <span className="wxd-mono">NEXT_PUBLIC_SOCKET_URL</span>
             </p>
           </div>
         </div>
@@ -375,28 +475,28 @@ export function ChatApp() {
 
   if (screen === "login" || screen === "register") {
     return (
-      <div className="wx-auth-page">
-        <div className="wx-auth-card">
-          <div className="wx-brand">
-            <div className="wx-brand-mark">微</div>
-            <h1>{screen === "login" ? "登录" : "注册账号"}</h1>
-            <p>账号、密码与聊天记录由后端持久保存（MongoDB、PostgreSQL 或 SQLite）</p>
+      <div className="wxd-auth-page">
+        <div className="wxd-auth-card">
+          <div className="wxd-auth-brand">
+            <div className="wxd-auth-logo">微</div>
+            <h1>{screen === "login" ? "登录" : "注册"}</h1>
+            <p>账号与聊天记录由服务器持久保存</p>
           </div>
 
-          <div className="wx-field">
+          <div className="wxd-field">
             <label>账号</label>
             <input
-              className="wx-input"
+              className="wxd-input"
               autoComplete="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="小写字母、数字、下划线"
             />
           </div>
-          <div className="wx-field">
+          <div className="wxd-field">
             <label>密码 {screen === "register" && "（至少 6 位）"}</label>
             <input
-              className="wx-input"
+              className="wxd-input"
               type="password"
               autoComplete={screen === "login" ? "current-password" : "new-password"}
               value={password}
@@ -404,10 +504,10 @@ export function ChatApp() {
             />
           </div>
           {screen === "register" && (
-            <div className="wx-field">
+            <div className="wxd-field">
               <label>显示名称</label>
               <input
-                className="wx-input"
+                className="wxd-input"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="好友看到的名字"
@@ -415,17 +515,17 @@ export function ChatApp() {
               />
             </div>
           )}
-          {formErr && <p className="wx-form-err">{formErr}</p>}
+          {formErr && <p className="wxd-form-err">{formErr}</p>}
           <button
             type="button"
-            className="wx-btn-primary"
+            className="wxd-btn-primary"
             onClick={screen === "login" ? onLogin : onRegister}
           >
             {screen === "login" ? "登录" : "注册并进入"}
           </button>
           <button
             type="button"
-            className="wx-btn-ghost"
+            className="wxd-btn-text"
             onClick={() => {
               setFormErr(null);
               setScreen(screen === "login" ? "register" : "login");
@@ -438,137 +538,191 @@ export function ChatApp() {
     );
   }
 
+  const connLabel =
+    socketStatus === "on" ? "已连接" : socketStatus === "connecting" ? "连接中" : socketStatus === "err" ? "异常" : "未连接";
+
   return (
-    <div className="wx-shell">
-      <div className="wx-app">
-        <aside className="wx-sidebar">
-          <div className="wx-profile">
-            <div className="wx-avatar">{me ? avatarChar(me.displayName) : "?"}</div>
-            <div className="wx-profile-info">
-              <div className="wx-profile-name">{me?.displayName}</div>
-              <div className="wx-profile-id">@{me?.username}</div>
-            </div>
-            <button type="button" className="wx-btn-logout" onClick={logout}>
-              退出
-            </button>
-          </div>
+    <div className="wxd-root">
+      <aside className="wxd-rail" aria-label="主导航">
+        <div className="wxd-rail-user" title={me?.displayName}>
+          {me ? avatarChar(me.displayName) : "?"}
+        </div>
+        <nav className="wxd-rail-nav">
+          <button type="button" className="wxd-rail-btn is-active" title="聊天" aria-label="聊天">
+            <IconChat />
+          </button>
+          <button type="button" className="wxd-rail-btn" title="通讯录" aria-label="通讯录">
+            <IconContacts />
+          </button>
+        </nav>
+        <button
+          type="button"
+          className="wxd-rail-btn danger"
+          title="退出登录"
+          aria-label="退出登录"
+          onClick={logout}
+        >
+          <IconLeave />
+        </button>
+      </aside>
 
-          <div className="wx-status-pill" data-on={socketStatus === "on"}>
-            {socketStatus === "on"
-              ? "实时连接正常"
-              : socketStatus === "connecting"
-                ? "正在连接…"
-                : socketStatus === "err"
-                  ? "连接异常"
-                  : "未连接"}
-            {storageHint && ` · ${storageHint}`}
-          </div>
+      <div className="wxd-list">
+        <div className="wxd-list-toolbar">
+          <input
+            className="wxd-search"
+            placeholder="搜索"
+            value={listSearch}
+            onChange={(e) => setListSearch(e.target.value)}
+            aria-label="搜索会话"
+          />
+          <button
+            type="button"
+            className="wxd-plus"
+            onClick={() => setAddPanelOpen((v) => !v)}
+            aria-label="添加"
+          >
+            +
+          </button>
+        </div>
 
-          <div className="wx-section-label">新朋友</div>
-          {incoming.length === 0 && <div className="wx-hint">暂无申请</div>}
-          {incoming.map((r) => (
-            <div key={r.id} className="wx-incoming-item">
-              <div>
-                <div className="wx-friend-name">{r.from_display_name}</div>
-                <div className="wx-friend-sub">@{r.from_username}</div>
-              </div>
-              <div className="wx-incoming-actions">
-                <button type="button" className="wx-btn-xs accept" onClick={() => onAccept(r.id)}>
-                  接受
+        <div className="wxd-list-scroll">
+          {addPanelOpen && (
+            <div className="wxd-panel-block">
+              <div className="wxd-panel-title">添加好友</div>
+              <div className="wxd-add-inline">
+                <input
+                  className="wxd-input"
+                  placeholder="对方账号"
+                  value={addTarget}
+                  onChange={(e) => setAddTarget(e.target.value)}
+                />
+                <button type="button" className="wxd-btn-mini" onClick={onAddFriend}>
+                  添加
                 </button>
-                <button type="button" className="wx-btn-xs reject" onClick={() => onReject(r.id)}>
-                  拒绝
-                </button>
               </div>
+              {addMsg && <div className="wxd-hint">{addMsg}</div>}
             </div>
-          ))}
+          )}
 
-          <div className="wx-section-label">添加好友</div>
-          <div className="wx-add-row">
-            <input
-              className="wx-input"
-              placeholder="输入对方账号"
-              value={addTarget}
-              onChange={(e) => setAddTarget(e.target.value)}
-            />
-            <button type="button" className="wx-btn-sm" onClick={onAddFriend}>
-              添加
-            </button>
-          </div>
-          {addMsg && <div className="wx-hint">{addMsg}</div>}
-
-          <div className="wx-section-label">好友</div>
-          <div className="wx-friend-list">
-            {friends.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                className="wx-friend-item"
-                data-active={selected?.id === f.id}
-                onClick={() => openChat(f)}
-              >
-                <div className="wx-avatar wx-avatar--sm">{avatarChar(f.display_name)}</div>
-                <div className="wx-friend-meta">
-                  <div className="wx-friend-name">{f.display_name}</div>
-                  <div className="wx-friend-sub">@{f.username}</div>
+          {incoming.length > 0 && (
+            <div className="wxd-panel-block">
+              <div className="wxd-panel-title">新朋友 · {incoming.length}</div>
+              {incoming.map((r) => (
+                <div key={r.id} className="wxd-req-row">
+                  <div>
+                    <div className="wxd-conv-name">{r.from_display_name}</div>
+                    <div className="wxd-conv-preview">@{r.from_username}</div>
+                  </div>
+                  <div className="wxd-req-actions">
+                    <button type="button" className="wxd-req-ok" onClick={() => onAccept(r.id)}>
+                      接受
+                    </button>
+                    <button type="button" className="wxd-req-no" onClick={() => onReject(r.id)}>
+                      拒绝
+                    </button>
+                  </div>
                 </div>
-              </button>
-            ))}
-            {friends.length === 0 && (
-              <div className="wx-empty-side">添加好友后即可开始聊天，聊天记录会保存在服务器</div>
-            )}
-          </div>
-        </aside>
+              ))}
+            </div>
+          )}
 
-        <section className="wx-chat">
-          {!selected ? (
-            <div className="wx-chat-empty">选择一位好友开始聊天</div>
+          {filteredFriends.length === 0 ? (
+            <div className="wxd-list-empty">
+              {friends.length === 0
+                ? "还没有会话。点击「+」添加好友。"
+                : "没有匹配的会话。"}
+            </div>
           ) : (
-            <>
-              <div className="wx-chat-header">
-                <div className="wx-avatar wx-avatar--xs">{avatarChar(selected.display_name)}</div>
-                <div>
-                  <h2>{selected.display_name}</h2>
-                  <span>@{selected.username}</span>
-                </div>
-              </div>
-              <div ref={listRef} className="wx-msg-scroll">
-                {messages.map((m) => (
-                  <div key={m.id} className={`wx-msg-row ${m.fromMe ? "me" : ""}`}>
-                    <div className={`wx-bubble ${m.fromMe ? "me" : "them"}`}>
-                      {!m.fromMe && m.fromLabel && <div className="wx-from">{m.fromLabel}</div>}
-                      <div>{m.text}</div>
-                      <time>
-                        {new Date(m.ts).toLocaleTimeString("zh-CN", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </time>
+            filteredFriends.map((f) => {
+              const pv = peerPreview[f.id];
+              return (
+                <button
+                  key={f.id}
+                  type="button"
+                  className={`wxd-conv ${selected?.id === f.id ? "is-active" : ""}`}
+                  onClick={() => openChat(f)}
+                >
+                  <div className="wxd-conv-av">{avatarChar(f.display_name)}</div>
+                  <div className="wxd-conv-mid">
+                    <div className="wxd-conv-top">
+                      <span className="wxd-conv-name">{f.display_name}</span>
+                      {pv && <span className="wxd-conv-time">{formatListTime(pv.ts)}</span>}
+                    </div>
+                    <div className="wxd-conv-preview">
+                      {pv ? pv.text : `@${f.username}`}
                     </div>
                   </div>
-                ))}
-              </div>
-              <div className="wx-composer">
-                <input
-                  className="wx-input"
-                  placeholder="发消息…"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      sendDm();
-                    }
-                  }}
-                />
-                <button type="button" className="wx-btn-sm" onClick={sendDm} disabled={!input.trim()}>
-                  发送
                 </button>
-              </div>
-            </>
+              );
+            })
           )}
-        </section>
+        </div>
       </div>
+
+      <main className="wxd-main">
+        {selected ? (
+          <>
+            <div className="wxd-main-head">
+              <div className="wxd-conv-av wxd-conv-av--xs">{avatarChar(selected.display_name)}</div>
+              <div>
+                <h2>{selected.display_name}</h2>
+                <span>@{selected.username}</span>
+              </div>
+            </div>
+            <div className="wxd-status-bar">
+              {connLabel}
+              {storageHint ? ` · ${storageHint}` : ""}
+            </div>
+            <div ref={listRef} className="wxd-msgs">
+              {messages.map((m) => (
+                <div key={m.id} className={`wxd-msg-row ${m.fromMe ? "me" : ""}`}>
+                  <div className={`wxd-bubble ${m.fromMe ? "me" : "them"}`}>
+                    {!m.fromMe && m.fromLabel && <div className="wxd-from">{m.fromLabel}</div>}
+                    <div>{m.text}</div>
+                    <time>
+                      {new Date(m.ts).toLocaleTimeString("zh-CN", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </time>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="wxd-compose">
+              <input
+                className="wxd-input"
+                placeholder="发消息…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    sendDm();
+                  }
+                }}
+              />
+              <button type="button" className="wxd-btn-mini" onClick={sendDm} disabled={!input.trim()}>
+                发送
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="wxd-main-head">
+              <h2>微信</h2>
+            </div>
+            <div className="wxd-status-bar">
+              {connLabel}
+              {storageHint ? ` · 存储：${storageHint}` : ""}
+            </div>
+            <div className="wxd-empty-main">
+              <div className="wxd-empty-logo" aria-hidden />
+              <p className="wxd-empty-tip">在左侧选择一个会话开始聊天</p>
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 }
