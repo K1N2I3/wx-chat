@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
 const TOKEN_KEY = "wx_token";
@@ -126,6 +126,7 @@ export function ChatApp() {
   const [listSearch, setListSearch] = useState("");
   const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [peerPreview, setPeerPreview] = useState<Record<string, PeerPreview>>({});
+  const [isCompact, setIsCompact] = useState(false);
 
   const [selected, setSelected] = useState<Friend | null>(null);
   const [messages, setMessages] = useState<UiMessage[]>([]);
@@ -164,6 +165,15 @@ export function ChatApp() {
     document.documentElement.classList.toggle("wxd-full", screen === "main");
     return () => document.documentElement.classList.remove("wxd-full");
   }, [screen]);
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 720px)");
+    const apply = () => setIsCompact(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   useEffect(() => {
     if (!apiBase) return;
@@ -347,6 +357,12 @@ export function ChatApp() {
       setSocketStatus("off");
     };
   }, [screen, token, apiBase, joinDmRoom, bumpPreview]);
+
+  const closeChat = useCallback(() => {
+    setSelected(null);
+    selectedRef.current = null;
+    setMessages([]);
+  }, []);
 
   const openChat = useCallback(
     (f: Friend) => {
@@ -541,8 +557,14 @@ export function ChatApp() {
   const connLabel =
     socketStatus === "on" ? "已连接" : socketStatus === "connecting" ? "连接中" : socketStatus === "err" ? "异常" : "未连接";
 
+  const rootCompact = isCompact ? " wxd-root--compact" : "";
+  const rootPanel = isCompact ? (selected ? "chat" : "list") : undefined;
+
   return (
-    <div className="wxd-root">
+    <div
+      className={`wxd-root${rootCompact}`}
+      {...(rootPanel ? { "data-panel": rootPanel } : {})}
+    >
       <aside className="wxd-rail" aria-label="主导航">
         <div className="wxd-rail-user" title={me?.displayName}>
           {me ? avatarChar(me.displayName) : "?"}
@@ -567,6 +589,20 @@ export function ChatApp() {
       </aside>
 
       <div className="wxd-list">
+        {isCompact && me && (
+          <div className="wxd-mobile-bar">
+            <div className="wxd-mobile-bar-user">
+              <div className="wxd-conv-av wxd-conv-av--xs">{avatarChar(me.displayName)}</div>
+              <div className="wxd-mobile-bar-meta">
+                <div className="wxd-mobile-bar-title">微信</div>
+                <span>{me.displayName}</span>
+              </div>
+            </div>
+            <button type="button" className="wxd-mobile-bar-out" onClick={logout}>
+              退出
+            </button>
+          </div>
+        )}
         <div className="wxd-list-toolbar">
           <input
             className="wxd-search"
@@ -663,8 +699,13 @@ export function ChatApp() {
         {selected ? (
           <>
             <div className="wxd-main-head">
+              {isCompact && (
+                <button type="button" className="wxd-back" onClick={closeChat} aria-label="返回会话列表">
+                  ‹
+                </button>
+              )}
               <div className="wxd-conv-av wxd-conv-av--xs">{avatarChar(selected.display_name)}</div>
-              <div>
+              <div className="wxd-mobile-bar-meta">
                 <h2>{selected.display_name}</h2>
                 <span>@{selected.username}</span>
               </div>
