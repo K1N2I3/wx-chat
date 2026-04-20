@@ -356,13 +356,36 @@ function createPgDb(pool) {
   };
 }
 
+function resolveMongoUri() {
+  const explicit = process.env.MONGODB_URI || process.env.MONGO_URL;
+  if (explicit) return explicit;
+  const du = process.env.DATABASE_URL;
+  if (du && (du.startsWith("mongodb://") || du.startsWith("mongodb+srv://"))) return du;
+  return null;
+}
+
+function resolvePostgresUrl() {
+  const du = process.env.DATABASE_URL;
+  if (!du) return null;
+  if (du.startsWith("postgres://") || du.startsWith("postgresql://")) return du;
+  return null;
+}
+
 async function createDb() {
-  const url = process.env.DATABASE_URL;
-  if (url) {
+  const mongoUri = resolveMongoUri();
+  if (mongoUri) {
+    const { createMongoDb } = require("./db-mongo");
+    const db = await createMongoDb(mongoUri);
+    console.log("[db] MongoDB 已连接（账号、好友与聊天记录持久保存）");
+    return db;
+  }
+
+  const pgUrl = resolvePostgresUrl();
+  if (pgUrl) {
     const { Pool } = require("pg");
     const pool = new Pool({
-      connectionString: url,
-      ssl: url.includes("localhost") || url.includes("127.0.0.1") ? false : { rejectUnauthorized: false },
+      connectionString: pgUrl,
+      ssl: pgUrl.includes("localhost") || pgUrl.includes("127.0.0.1") ? false : { rejectUnauthorized: false },
     });
     const db = createPgDb(pool);
     await db.init();

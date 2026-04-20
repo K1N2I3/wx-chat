@@ -17,6 +17,10 @@ services:
       # 随机长字符串，用于登录 Token（必填）
       - key: JWT_SECRET
         sync: false
-      # 推荐：在 Render 创建 PostgreSQL 后粘贴 Internal Database URL
+      # 任选：PostgreSQL 的 DATABASE_URL，或 MongoDB 的 MONGODB_URI（二选一即可持久化）
       - key: DATABASE_URL
+        sync: false
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
         sync: false

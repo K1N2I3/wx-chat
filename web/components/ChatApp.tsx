@@ -98,7 +98,8 @@ export function ChatApp() {
     fetch(`${apiBase}/health`)
       .then((r) => r.json())
       .then((d: { storage?: string }) => {
-        if (d.storage === "sqlite") setStorageHint("数据保存在服务器 SQLite 文件");
+        if (d.storage === "mongodb") setStorageHint("数据保存在 MongoDB");
+        else if (d.storage === "sqlite") setStorageHint("数据保存在服务器 SQLite 文件");
         else if (d.storage === "postgres") setStorageHint("数据保存在 PostgreSQL");
         else if (d.storage === "memory") setStorageHint("当前为内存模式，数据不持久");
       })
@@ -379,7 +380,7 @@ export function ChatApp() {
           <div className="wx-brand">
             <div className="wx-brand-mark">微</div>
             <h1>{screen === "login" ? "登录" : "注册账号"}</h1>
-            <p>账号、密码与聊天记录由后端持久保存（PostgreSQL 或 SQLite）</p>
+            <p>账号、密码与聊天记录由后端持久保存（MongoDB、PostgreSQL 或 SQLite）</p>
           </div>
 
           <div className="wx-field">
