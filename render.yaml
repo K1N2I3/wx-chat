@@ -1,0 +1,16 @@
+# Render Blueprint：连接 GitHub 后选 "Apply" 即可部署后端
+# 文档：https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: wx-chat-server
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # 部署完 Vercel 后，把前端地址填进来（多个用英文逗号）
+      - key: CORS_ORIGIN
+        sync: false
