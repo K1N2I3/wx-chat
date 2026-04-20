@@ -26,10 +26,6 @@ app.use(
   })
 );
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "wx-chat", mode: "wechat-like" });
-});
-
 function publicUser(row) {
   if (!row) return null;
   return {
@@ -313,6 +309,15 @@ function registerSocketIO(io, db) {
 
 createDb()
   .then((db) => {
+    app.get("/health", (_req, res) => {
+      res.json({
+        ok: true,
+        service: "wx-chat",
+        storage: db.mode,
+        ...(db.filePath ? { sqlitePath: db.filePath } : {}),
+      });
+    });
+
     registerHttpRoutes(db);
 
     const server = http.createServer(app);

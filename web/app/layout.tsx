@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "微信风格聊天",
-  description: "注册账号、添加好友、与好友私聊",
+  title: "微聊",
+  description: "注册登录、添加好友、私聊，聊天记录持久保存",
 };
 
 export default function RootLayout({

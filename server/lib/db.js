@@ -358,18 +358,29 @@ function createPgDb(pool) {
 
 async function createDb() {
   const url = process.env.DATABASE_URL;
-  if (!url) {
-    console.warn("[db] 未设置 DATABASE_URL，使用内存数据库（重启后数据清空）。生产环境请绑定 PostgreSQL。");
+  if (url) {
+    const { Pool } = require("pg");
+    const pool = new Pool({
+      connectionString: url,
+      ssl: url.includes("localhost") || url.includes("127.0.0.1") ? false : { rejectUnauthorized: false },
+    });
+    const db = createPgDb(pool);
+    await db.init();
+    console.log("[db] PostgreSQL 已连接并初始化表结构");
+    return db;
+  }
+
+  if (process.env.USE_MEMORY_DB === "1") {
+    console.warn("[db] USE_MEMORY_DB=1：内存模式，数据不持久化（仅调试）");
     return createMemoryDb();
   }
-  const { Pool } = require("pg");
-  const pool = new Pool({
-    connectionString: url,
-    ssl: url.includes("localhost") ? false : { rejectUnauthorized: false },
-  });
-  const db = createPgDb(pool);
-  await db.init();
-  console.log("[db] PostgreSQL 已连接并初始化表结构");
+
+  const path = require("path");
+  const { createSqliteDb } = require("./db-sqlite");
+  const sqlitePath =
+    process.env.SQLITE_PATH || path.join(process.cwd(), "data", "wx.db");
+  const db = createSqliteDb(sqlitePath);
+  console.log(`[db] SQLite 文件库：${sqlitePath}（账号与聊天记录持久保存）`);
   return db;
 }
 

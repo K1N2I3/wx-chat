@@ -3,10 +3,8 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
-  type CSSProperties,
 } from "react";
 import { io, type Socket } from "socket.io-client";
 
@@ -14,9 +12,7 @@ const TOKEN_KEY = "wx_token";
 const USER_KEY = "wx_user";
 
 type PublicUser = { id: string; username: string; displayName: string };
-
 type Friend = { id: string; username: string; display_name: string };
-
 type IncomingReq = {
   id: string;
   from_user: string;
@@ -32,6 +28,11 @@ type UiMessage = {
   fromMe: boolean;
   fromLabel?: string;
 };
+
+function avatarChar(name: string) {
+  const t = name.trim();
+  return t ? t[0].toUpperCase() : "?";
+}
 
 async function api<T>(
   base: string,
@@ -69,6 +70,7 @@ export function ChatApp() {
   const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState("");
   const [socketStatus, setSocketStatus] = useState<"off" | "connecting" | "on" | "err">("off");
+  const [storageHint, setStorageHint] = useState<string | null>(null);
 
   const socketRef = useRef<Socket | null>(null);
   const selectedRef = useRef<Friend | null>(null);
@@ -90,6 +92,18 @@ export function ChatApp() {
       /* ignore */
     }
   }, []);
+
+  useEffect(() => {
+    if (!apiBase) return;
+    fetch(`${apiBase}/health`)
+      .then((r) => r.json())
+      .then((d: { storage?: string }) => {
+        if (d.storage === "sqlite") setStorageHint("数据保存在服务器 SQLite 文件");
+        else if (d.storage === "postgres") setStorageHint("数据保存在 PostgreSQL");
+        else if (d.storage === "memory") setStorageHint("当前为内存模式，数据不持久");
+      })
+      .catch(() => setStorageHint(null));
+  }, [apiBase]);
 
   const persistAuth = useCallback((t: string, u: PublicUser) => {
     localStorage.setItem(TOKEN_KEY, t);
@@ -143,17 +157,17 @@ export function ChatApp() {
   }, [screen, token, loadSocial]);
 
   useEffect(() => {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages]);
-
-  useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
 
   useEffect(() => {
     meRef.current = me;
   }, [me]);
+
+  useEffect(() => {
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
 
   const joinDmRoom = useCallback((f: Friend) => {
     const s = socketRef.current;
@@ -164,7 +178,6 @@ export function ChatApp() {
       (res: {
         ok?: boolean;
         history?: { id: string; text: string; ts: number; fromMe: boolean }[];
-        error?: string;
       }) => {
         if (!res?.ok) {
           setMessages([]);
@@ -257,9 +270,7 @@ export function ChatApp() {
     const s = socketRef.current;
     const t = input.trim();
     if (!s || !selected || !t || !me) return;
-    s.emit("dm_message", { peerUserId: selected.id, text: t }, (ack: { ok?: boolean }) => {
-      if (!ack?.ok) return;
-    });
+    s.emit("dm_message", { peerUserId: selected.id, text: t }, () => {});
     setInput("");
   }, [input, selected, me]);
 
@@ -326,9 +337,8 @@ export function ChatApp() {
         body: JSON.stringify({ requestId }),
       });
       await loadSocial();
-      if (selected) openChat(selected);
     } catch {
-      /* toast optional */
+      /* ignore */
     }
   };
 
@@ -346,217 +356,200 @@ export function ChatApp() {
     }
   };
 
-  const layoutMain = useMemo(
-    () => ({
-      ...shell,
-      alignItems: "stretch",
-      justifyContent: "center",
-      maxWidth: 920,
-      margin: "0 auto",
-    }),
-    []
-  );
-
   if (!apiBase) {
     return (
-      <main style={shell}>
-        <div style={card}>
-          <h1 style={title}>微信风格聊天</h1>
-          <p style={{ color: "var(--muted)", margin: 0 }}>
-            请在 Vercel 环境变量中设置{" "}
-            <code style={code}>NEXT_PUBLIC_SOCKET_URL</code> 为 Render 后端地址。
-          </p>
+      <div className="wx-auth-page">
+        <div className="wx-auth-card">
+          <div className="wx-brand">
+            <div className="wx-brand-mark">微</div>
+            <h1>需要配置后端地址</h1>
+            <p>
+              在 Vercel 设置环境变量 <span className="wx-mono">NEXT_PUBLIC_SOCKET_URL</span>
+            </p>
+          </div>
         </div>
-      </main>
+      </div>
     );
   }
 
   if (screen === "login" || screen === "register") {
     return (
-      <main style={shell}>
-        <div style={card}>
-          <header style={header}>
-            <h1 style={title}>{screen === "login" ? "登录" : "注册账号"}</h1>
-          </header>
-          <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: 0 }}>
-            账号相当于微信号（3–32 位小写字母、数字、下划线），注册后可添加好友再聊天。
-          </p>
-          <section style={formSection}>
-            <label style={label}>
-              账号
+      <div className="wx-auth-page">
+        <div className="wx-auth-card">
+          <div className="wx-brand">
+            <div className="wx-brand-mark">微</div>
+            <h1>{screen === "login" ? "登录" : "注册账号"}</h1>
+            <p>账号、密码与聊天记录由后端持久保存（PostgreSQL 或 SQLite）</p>
+          </div>
+
+          <div className="wx-field">
+            <label>账号</label>
+            <input
+              className="wx-input"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="小写字母、数字、下划线"
+            />
+          </div>
+          <div className="wx-field">
+            <label>密码 {screen === "register" && "（至少 6 位）"}</label>
+            <input
+              className="wx-input"
+              type="password"
+              autoComplete={screen === "login" ? "current-password" : "new-password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          {screen === "register" && (
+            <div className="wx-field">
+              <label>显示名称</label>
               <input
-                style={inputStyle}
-                autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="例如 zhangsan"
+                className="wx-input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="好友看到的名字"
+                maxLength={32}
               />
-            </label>
-            <label style={label}>
-              密码 {screen === "register" && <span style={{ fontWeight: 400 }}>（至少 6 位）</span>}
-              <input
-                style={inputStyle}
-                type="password"
-                autoComplete={screen === "login" ? "current-password" : "new-password"}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-            {screen === "register" && (
-              <label style={label}>
-                显示名称
-                <input
-                  style={inputStyle}
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="好友看到的名字"
-                  maxLength={32}
-                />
-              </label>
-            )}
-            {formErr && <p style={{ color: "var(--danger)", margin: 0 }}>{formErr}</p>}
-            <button
-              type="button"
-              style={btnPrimary}
-              onClick={screen === "login" ? onLogin : onRegister}
-            >
-              {screen === "login" ? "登录" : "注册并进入"}
-            </button>
-            <button
-              type="button"
-              style={btnGhost}
-              onClick={() => {
-                setFormErr(null);
-                setScreen(screen === "login" ? "register" : "login");
-              }}
-            >
-              {screen === "login" ? "没有账号？去注册" : "已有账号？去登录"}
-            </button>
-          </section>
+            </div>
+          )}
+          {formErr && <p className="wx-form-err">{formErr}</p>}
+          <button
+            type="button"
+            className="wx-btn-primary"
+            onClick={screen === "login" ? onLogin : onRegister}
+          >
+            {screen === "login" ? "登录" : "注册并进入"}
+          </button>
+          <button
+            type="button"
+            className="wx-btn-ghost"
+            onClick={() => {
+              setFormErr(null);
+              setScreen(screen === "login" ? "register" : "login");
+            }}
+          >
+            {screen === "login" ? "没有账号？去注册" : "已有账号？去登录"}
+          </button>
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
-    <main style={layoutMain}>
-      <div style={mainRow}>
-        <aside style={sidebar}>
-          <div style={sideHead}>
-            <div>
-              <div style={{ fontWeight: 600 }}>{me?.displayName}</div>
-              <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{me?.username}</div>
+    <div className="wx-shell">
+      <div className="wx-app">
+        <aside className="wx-sidebar">
+          <div className="wx-profile">
+            <div className="wx-avatar">{me ? avatarChar(me.displayName) : "?"}</div>
+            <div className="wx-profile-info">
+              <div className="wx-profile-name">{me?.displayName}</div>
+              <div className="wx-profile-id">@{me?.username}</div>
             </div>
-            <button type="button" style={btnGhost} onClick={logout}>
+            <button type="button" className="wx-btn-logout" onClick={logout}>
               退出
             </button>
           </div>
-          <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 8 }}>
-            实时连接：
-            {socketStatus === "on" ? "已连接" : socketStatus === "connecting" ? "连接中…" : socketStatus === "err" ? "失败" : "未连接"}
+
+          <div className="wx-status-pill" data-on={socketStatus === "on"}>
+            {socketStatus === "on"
+              ? "实时连接正常"
+              : socketStatus === "connecting"
+                ? "正在连接…"
+                : socketStatus === "err"
+                  ? "连接异常"
+                  : "未连接"}
+            {storageHint && ` · ${storageHint}`}
           </div>
 
-          <div style={sectionTitle}>新朋友</div>
-          {incoming.length === 0 && (
-            <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>暂无申请</div>
-          )}
+          <div className="wx-section-label">新朋友</div>
+          {incoming.length === 0 && <div className="wx-hint">暂无申请</div>}
           {incoming.map((r) => (
-            <div key={r.id} style={incomingRow}>
+            <div key={r.id} className="wx-incoming-item">
               <div>
-                <div style={{ fontWeight: 500 }}>{r.from_display_name}</div>
-                <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{r.from_username}</div>
+                <div className="wx-friend-name">{r.from_display_name}</div>
+                <div className="wx-friend-sub">@{r.from_username}</div>
               </div>
-              <div style={{ display: "flex", gap: 4 }}>
-                <button type="button" style={btnMini} onClick={() => onAccept(r.id)}>
+              <div className="wx-incoming-actions">
+                <button type="button" className="wx-btn-xs accept" onClick={() => onAccept(r.id)}>
                   接受
                 </button>
-                <button type="button" style={btnMiniGhost} onClick={() => onReject(r.id)}>
+                <button type="button" className="wx-btn-xs reject" onClick={() => onReject(r.id)}>
                   拒绝
                 </button>
               </div>
             </div>
           ))}
 
-          <div style={{ ...sectionTitle, marginTop: 12 }}>添加好友</div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          <div className="wx-section-label">添加好友</div>
+          <div className="wx-add-row">
             <input
-              style={{ ...inputStyle, flex: 1, margin: 0 }}
-              placeholder="对方账号"
+              className="wx-input"
+              placeholder="输入对方账号"
               value={addTarget}
               onChange={(e) => setAddTarget(e.target.value)}
             />
-            <button type="button" style={btnMini} onClick={onAddFriend}>
+            <button type="button" className="wx-btn-sm" onClick={onAddFriend}>
               添加
             </button>
           </div>
-          {addMsg && <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>{addMsg}</div>}
+          {addMsg && <div className="wx-hint">{addMsg}</div>}
 
-          <div style={sectionTitle}>好友</div>
-          <div style={friendList}>
+          <div className="wx-section-label">好友</div>
+          <div className="wx-friend-list">
             {friends.map((f) => (
               <button
                 key={f.id}
                 type="button"
+                className="wx-friend-item"
+                data-active={selected?.id === f.id}
                 onClick={() => openChat(f)}
-                style={{
-                  ...friendItem,
-                  background: selected?.id === f.id ? "var(--border)" : "transparent",
-                }}
               >
-                <div style={{ fontWeight: 500 }}>{f.display_name}</div>
-                <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{f.username}</div>
+                <div className="wx-avatar wx-avatar--sm">{avatarChar(f.display_name)}</div>
+                <div className="wx-friend-meta">
+                  <div className="wx-friend-name">{f.display_name}</div>
+                  <div className="wx-friend-sub">@{f.username}</div>
+                </div>
               </button>
             ))}
             {friends.length === 0 && (
-              <div style={{ fontSize: "0.85rem", color: "var(--muted)", padding: "8px 0" }}>
-                还没有好友，先添加对方账号发送申请。
-              </div>
+              <div className="wx-empty-side">添加好友后即可开始聊天，聊天记录会保存在服务器</div>
             )}
           </div>
         </aside>
 
-        <section style={chatPane}>
+        <section className="wx-chat">
           {!selected ? (
-            <div style={emptyChat}>选择一位好友开始聊天</div>
+            <div className="wx-chat-empty">选择一位好友开始聊天</div>
           ) : (
             <>
-              <div style={chatTop}>
-                <span style={{ fontWeight: 600 }}>{selected.display_name}</span>
-                <span style={{ fontSize: "0.8rem", color: "var(--muted)", marginLeft: 8 }}>
-                  @{selected.username}
-                </span>
+              <div className="wx-chat-header">
+                <div className="wx-avatar wx-avatar--xs">{avatarChar(selected.display_name)}</div>
+                <div>
+                  <h2>{selected.display_name}</h2>
+                  <span>@{selected.username}</span>
+                </div>
               </div>
-              <div ref={listRef} style={msgList}>
+              <div ref={listRef} className="wx-msg-scroll">
                 {messages.map((m) => (
-                  <div
-                    key={m.id}
-                    style={{
-                      ...bubbleRow,
-                      justifyContent: m.fromMe ? "flex-end" : "flex-start",
-                    }}
-                  >
-                    <div
-                      style={{
-                        ...bubble,
-                        background: m.fromMe ? "var(--bubble-me)" : "var(--bubble-them)",
-                        color: m.fromMe ? "#fff" : "var(--text)",
-                      }}
-                    >
-                      {!m.fromMe && m.fromLabel && <div style={nameTag}>{m.fromLabel}</div>}
-                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
-                      <div style={timeTag}>
+                  <div key={m.id} className={`wx-msg-row ${m.fromMe ? "me" : ""}`}>
+                    <div className={`wx-bubble ${m.fromMe ? "me" : "them"}`}>
+                      {!m.fromMe && m.fromLabel && <div className="wx-from">{m.fromLabel}</div>}
+                      <div>{m.text}</div>
+                      <time>
                         {new Date(m.ts).toLocaleTimeString("zh-CN", {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
-                      </div>
+                      </time>
                     </div>
                   </div>
                 ))}
               </div>
-              <div style={composer}>
+              <div className="wx-composer">
                 <input
-                  style={{ ...inputStyle, flex: 1 }}
+                  className="wx-input"
                   placeholder="发消息…"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
@@ -567,7 +560,7 @@ export function ChatApp() {
                     }
                   }}
                 />
-                <button type="button" style={btnPrimary} onClick={sendDm} disabled={!input.trim()}>
+                <button type="button" className="wx-btn-sm" onClick={sendDm} disabled={!input.trim()}>
                   发送
                 </button>
               </div>
@@ -575,232 +568,6 @@ export function ChatApp() {
           )}
         </section>
       </div>
-    </main>
+    </div>
   );
 }
-
-const shell: CSSProperties = {
-  minHeight: "100dvh",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: "1rem",
-};
-
-const mainRow: CSSProperties = {
-  display: "flex",
-  width: "100%",
-  minHeight: "min(88vh, 640px)",
-  background: "var(--surface)",
-  border: "1px solid var(--border)",
-  borderRadius: 12,
-  overflow: "hidden",
-  boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-};
-
-const sidebar: CSSProperties = {
-  width: 280,
-  flexShrink: 0,
-  borderRight: "1px solid var(--border)",
-  padding: "12px",
-  display: "flex",
-  flexDirection: "column",
-  background: "var(--bg)",
-};
-
-const sideHead: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  marginBottom: 12,
-  gap: 8,
-};
-
-const sectionTitle: CSSProperties = {
-  fontSize: "0.75rem",
-  color: "var(--muted)",
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  marginBottom: 6,
-};
-
-const incomingRow: CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  padding: "8px 0",
-  borderBottom: "1px solid var(--border)",
-  fontSize: "0.85rem",
-};
-
-const friendList: CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  marginTop: 4,
-};
-
-const friendItem: CSSProperties = {
-  width: "100%",
-  textAlign: "left",
-  padding: "10px 8px",
-  border: "none",
-  borderRadius: 8,
-  cursor: "pointer",
-  color: "var(--text)",
-  marginBottom: 4,
-};
-
-const chatPane: CSSProperties = {
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  minWidth: 0,
-  background: "var(--surface)",
-};
-
-const emptyChat: CSSProperties = {
-  flex: 1,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: "var(--muted)",
-};
-
-const chatTop: CSSProperties = {
-  padding: "12px 16px",
-  borderBottom: "1px solid var(--border)",
-};
-
-const card: CSSProperties = {
-  width: "100%",
-  maxWidth: 400,
-  background: "var(--surface)",
-  border: "1px solid var(--border)",
-  borderRadius: 12,
-  padding: "1.25rem",
-  boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
-};
-
-const header: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  marginBottom: "0.5rem",
-};
-
-const title: CSSProperties = {
-  margin: 0,
-  fontSize: "1.25rem",
-  fontWeight: 600,
-};
-
-const formSection: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "0.75rem",
-};
-
-const label: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  fontSize: "0.85rem",
-  color: "var(--muted)",
-};
-
-const inputStyle: CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  background: "var(--bg)",
-  color: "var(--text)",
-  fontSize: "1rem",
-  outline: "none",
-};
-
-const btnPrimary: CSSProperties = {
-  padding: "10px 16px",
-  borderRadius: 8,
-  border: "none",
-  background: "var(--accent)",
-  color: "#fff",
-  fontWeight: 600,
-  cursor: "pointer",
-  fontSize: "1rem",
-};
-
-const btnGhost: CSSProperties = {
-  padding: "6px 12px",
-  borderRadius: 8,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--muted)",
-  cursor: "pointer",
-  fontSize: "0.85rem",
-};
-
-const btnMini: CSSProperties = {
-  padding: "4px 10px",
-  borderRadius: 6,
-  border: "none",
-  background: "var(--accent)",
-  color: "#fff",
-  fontSize: "0.8rem",
-  cursor: "pointer",
-};
-
-const btnMiniGhost: CSSProperties = {
-  padding: "4px 10px",
-  borderRadius: 6,
-  border: "1px solid var(--border)",
-  background: "transparent",
-  color: "var(--muted)",
-  fontSize: "0.8rem",
-  cursor: "pointer",
-};
-
-const msgList: CSSProperties = {
-  flex: 1,
-  overflowY: "auto",
-  padding: "12px 16px",
-};
-
-const bubbleRow: CSSProperties = {
-  display: "flex",
-  marginBottom: "0.5rem",
-};
-
-const bubble: CSSProperties = {
-  maxWidth: "78%",
-  padding: "8px 12px",
-  borderRadius: 12,
-  fontSize: "0.95rem",
-};
-
-const nameTag: CSSProperties = {
-  fontSize: "0.75rem",
-  color: "var(--muted)",
-  marginBottom: 4,
-};
-
-const timeTag: CSSProperties = {
-  fontSize: "0.7rem",
-  opacity: 0.75,
-  marginTop: 4,
-  textAlign: "right",
-};
-
-const composer: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  padding: "12px 16px",
-  borderTop: "1px solid var(--border)",
-  alignItems: "center",
-};
-
-const code: CSSProperties = {
-  background: "var(--bg)",
-  padding: "2px 6px",
-  borderRadius: 4,
-  fontSize: "0.85em",
-};
