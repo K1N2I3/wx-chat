@@ -10,252 +10,540 @@ import {
 } from "react";
 import { io, type Socket } from "socket.io-client";
 
-type ChatMessage = {
+const TOKEN_KEY = "wx_token";
+const USER_KEY = "wx_user";
+
+type PublicUser = { id: string; username: string; displayName: string };
+
+type Friend = { id: string; username: string; display_name: string };
+
+type IncomingReq = {
   id: string;
-  from: string;
+  from_user: string;
+  from_username: string;
+  from_display_name: string;
+  created_at: string;
+};
+
+type UiMessage = {
+  id: string;
   text: string;
   ts: number;
+  fromMe: boolean;
+  fromLabel?: string;
 };
 
-type Presence = {
-  type: "join" | "leave";
-  nickname: string;
-  ts: number;
-};
-
-function defaultNickname() {
-  if (typeof window === "undefined") return "访客";
-  const k = "wx-chat-nickname";
-  const saved = localStorage.getItem(k);
-  if (saved) return saved;
-  const n = `用户${Math.floor(Math.random() * 9000 + 1000)}`;
-  localStorage.setItem(k, n);
-  return n;
+async function api<T>(
+  base: string,
+  path: string,
+  opts: RequestInit & { token?: string | null } = {}
+): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(opts.headers as Record<string, string>),
+  };
+  if (opts.token) headers.Authorization = `Bearer ${opts.token}`;
+  const res = await fetch(`${base}${path}`, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data as { error?: string }).error || res.statusText);
+  return data as T;
 }
 
 export function ChatApp() {
-  const serverUrl =
-    process.env.NEXT_PUBLIC_SOCKET_URL?.replace(/\/$/, "") || "";
+  const apiBase = process.env.NEXT_PUBLIC_SOCKET_URL?.replace(/\/$/, "") || "";
 
-  const [nickname, setNickname] = useState("");
-  const [roomId, setRoomId] = useState("");
-  const [joined, setJoined] = useState(false);
+  const [screen, setScreen] = useState<"login" | "register" | "main">("login");
+  const [token, setToken] = useState<string | null>(null);
+  const [me, setMe] = useState<PublicUser | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [formErr, setFormErr] = useState<string | null>(null);
+
+  const [friends, setFriends] = useState<Friend[]>([]);
+  const [incoming, setIncoming] = useState<IncomingReq[]>([]);
+  const [addTarget, setAddTarget] = useState("");
+  const [addMsg, setAddMsg] = useState<string | null>(null);
+
+  const [selected, setSelected] = useState<Friend | null>(null);
+  const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [presence, setPresence] = useState<Presence[]>([]);
-  const [status, setStatus] = useState<"idle" | "connecting" | "connected" | "error">(
-    "idle"
-  );
-  const [err, setErr] = useState<string | null>(null);
+  const [socketStatus, setSocketStatus] = useState<"off" | "connecting" | "on" | "err">("off");
 
   const socketRef = useRef<Socket | null>(null);
+  const selectedRef = useRef<Friend | null>(null);
+  const meRef = useRef<PublicUser | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setNickname(defaultNickname());
+    try {
+      const t = localStorage.getItem(TOKEN_KEY);
+      const u = localStorage.getItem(USER_KEY);
+      if (t && u) {
+        const parsed = JSON.parse(u) as PublicUser;
+        setToken(t);
+        setMe(parsed);
+        meRef.current = parsed;
+        setScreen("main");
+      }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
-  useEffect(() => {
-    if (!listRef.current) return;
-    listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages, presence]);
+  const persistAuth = useCallback((t: string, u: PublicUser) => {
+    localStorage.setItem(TOKEN_KEY, t);
+    localStorage.setItem(USER_KEY, JSON.stringify(u));
+    setToken(t);
+    setMe(u);
+    meRef.current = u;
+    setScreen("main");
+  }, []);
 
-  const canJoin = useMemo(() => {
-    return Boolean(serverUrl && roomId.trim() && nickname.trim());
-  }, [serverUrl, roomId, nickname]);
-
-  const disconnect = useCallback(() => {
+  const logout = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
     const s = socketRef.current;
     if (s) {
       s.removeAllListeners();
       s.disconnect();
       socketRef.current = null;
     }
-    setJoined(false);
-    setStatus("idle");
+    setToken(null);
+    setMe(null);
+    meRef.current = null;
+    selectedRef.current = null;
+    setFriends([]);
+    setIncoming([]);
+    setSelected(null);
+    setMessages([]);
+    setScreen("login");
+    setSocketStatus("off");
   }, []);
 
-  const connectAndJoin = useCallback(() => {
-    if (!canJoin || !serverUrl) return;
-    setErr(null);
-    setStatus("connecting");
+  const loadSocial = useCallback(async () => {
+    if (!apiBase || !token) return;
+    try {
+      const [f, inc] = await Promise.all([
+        api<{ friends: Friend[] }>(apiBase, "/api/friends", { token }),
+        api<{ requests: IncomingReq[] }>(apiBase, "/api/friends/incoming", { token }),
+      ]);
+      setFriends(f.friends || []);
+      setIncoming(inc.requests || []);
+    } catch {
+      /* silent */
+    }
+  }, [apiBase, token]);
 
-    const s = io(serverUrl, {
+  useEffect(() => {
+    if (screen !== "main" || !token) return;
+    loadSocial();
+    const id = setInterval(loadSocial, 8000);
+    return () => clearInterval(id);
+  }, [screen, token, loadSocial]);
+
+  useEffect(() => {
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [messages]);
+
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  useEffect(() => {
+    meRef.current = me;
+  }, [me]);
+
+  const joinDmRoom = useCallback((f: Friend) => {
+    const s = socketRef.current;
+    if (!s?.connected) return;
+    s.emit(
+      "join_dm",
+      { peerUserId: f.id },
+      (res: {
+        ok?: boolean;
+        history?: { id: string; text: string; ts: number; fromMe: boolean }[];
+        error?: string;
+      }) => {
+        if (!res?.ok) {
+          setMessages([]);
+          return;
+        }
+        setMessages(
+          (res.history || []).map((m) => ({
+            id: m.id,
+            text: m.text,
+            ts: m.ts,
+            fromMe: m.fromMe,
+            fromLabel: f.display_name,
+          }))
+        );
+      }
+    );
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "main" || !token || !apiBase) return;
+
+    setSocketStatus("connecting");
+    const s = io(apiBase, {
       path: "/socket.io/",
+      auth: { token },
       transports: ["websocket", "polling"],
       reconnection: true,
-      reconnectionAttempts: 8,
-      reconnectionDelay: 800,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 600,
       timeout: 20000,
     });
     socketRef.current = s;
 
     s.on("connect", () => {
-      setStatus("connected");
-      s.emit("join", {
-        roomId: roomId.trim(),
-        nickname: nickname.trim(),
-      });
-      setJoined(true);
-      try {
-        localStorage.setItem("wx-chat-nickname", nickname.trim());
-      } catch {
-        /* ignore */
+      setSocketStatus("on");
+      const sel = selectedRef.current;
+      if (sel) joinDmRoom(sel);
+    });
+    s.on("connect_error", () => setSocketStatus("err"));
+    s.on("disconnect", () => setSocketStatus("off"));
+
+    s.on(
+      "dm_message",
+      (payload: {
+        id: string;
+        text: string;
+        ts: number;
+        fromUserId: string;
+        fromDisplayName?: string;
+      }) => {
+        const self = meRef.current;
+        const sel = selectedRef.current;
+        if (!self || !sel) return;
+        if (payload.fromUserId !== self.id && payload.fromUserId !== sel.id) return;
+        setMessages((prev) => {
+          if (prev.some((m) => m.id === payload.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: payload.id,
+              text: payload.text,
+              ts: payload.ts,
+              fromMe: payload.fromUserId === self.id,
+              fromLabel: payload.fromDisplayName || sel.display_name,
+            },
+          ];
+        });
       }
-    });
+    );
 
-    s.on("connect_error", (e) => {
-      setStatus("error");
-      setErr(e.message || "连接失败");
-      setJoined(false);
-    });
+    return () => {
+      s.removeAllListeners();
+      s.disconnect();
+      socketRef.current = null;
+      setSocketStatus("off");
+    };
+  }, [screen, token, apiBase, joinDmRoom]);
 
-    s.on("disconnect", (reason) => {
-      if (reason === "io server disconnect") {
-        setErr("服务器断开连接");
-      }
-      setJoined(false);
-    });
+  const openChat = useCallback(
+    (f: Friend) => {
+      setSelected(f);
+      selectedRef.current = f;
+      setMessages([]);
+      joinDmRoom(f);
+    },
+    [joinDmRoom]
+  );
 
-    s.on("history", (data: { messages: ChatMessage[] }) => {
-      setMessages(Array.isArray(data?.messages) ? data.messages : []);
-    });
-
-    s.on("message", (msg: ChatMessage) => {
-      setMessages((prev) => [...prev, msg]);
-    });
-
-    s.on("presence", (p: Presence) => {
-      setPresence((prev) => [...prev.slice(-20), p]);
-    });
-  }, [canJoin, serverUrl, roomId, nickname]);
-
-  const send = useCallback(() => {
+  const sendDm = useCallback(() => {
     const s = socketRef.current;
     const t = input.trim();
-    if (!s || !joined || !t) return;
-    s.emit("message", { text: t });
+    if (!s || !selected || !t || !me) return;
+    s.emit("dm_message", { peerUserId: selected.id, text: t }, (ack: { ok?: boolean }) => {
+      if (!ack?.ok) return;
+    });
     setInput("");
-  }, [input, joined]);
+  }, [input, selected, me]);
 
-  useEffect(() => {
-    return () => disconnect();
-  }, [disconnect]);
+  const onLogin = async () => {
+    setFormErr(null);
+    if (!apiBase) return;
+    try {
+      const data = await api<{ token: string; user: PublicUser }>(apiBase, "/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({
+          username: username.trim().toLowerCase(),
+          password,
+        }),
+      });
+      persistAuth(data.token, data.user);
+      setPassword("");
+    } catch (e) {
+      setFormErr(e instanceof Error ? e.message : "登录失败");
+    }
+  };
 
-  if (!serverUrl) {
+  const onRegister = async () => {
+    setFormErr(null);
+    if (!apiBase) return;
+    try {
+      const data = await api<{ token: string; user: PublicUser }>(apiBase, "/api/auth/register", {
+        method: "POST",
+        body: JSON.stringify({
+          username: username.trim().toLowerCase(),
+          password,
+          displayName: displayName.trim() || username.trim(),
+        }),
+      });
+      persistAuth(data.token, data.user);
+      setPassword("");
+    } catch (e) {
+      setFormErr(e instanceof Error ? e.message : "注册失败");
+    }
+  };
+
+  const onAddFriend = async () => {
+    setAddMsg(null);
+    if (!token || !addTarget.trim()) return;
+    try {
+      const data = await api<{ mutual?: boolean; message?: string }>(apiBase, "/api/friends/request", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ targetUsername: addTarget.trim().toLowerCase() }),
+      });
+      setAddMsg(data.mutual ? "已互为好友" : data.message || "已发送");
+      setAddTarget("");
+      await loadSocial();
+    } catch (e) {
+      setAddMsg(e instanceof Error ? e.message : "添加失败");
+    }
+  };
+
+  const onAccept = async (requestId: string) => {
+    if (!token) return;
+    try {
+      await api(apiBase, "/api/friends/accept", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ requestId }),
+      });
+      await loadSocial();
+      if (selected) openChat(selected);
+    } catch {
+      /* toast optional */
+    }
+  };
+
+  const onReject = async (requestId: string) => {
+    if (!token) return;
+    try {
+      await api(apiBase, "/api/friends/reject", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ requestId }),
+      });
+      await loadSocial();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const layoutMain = useMemo(
+    () => ({
+      ...shell,
+      alignItems: "stretch",
+      justifyContent: "center",
+      maxWidth: 920,
+      margin: "0 auto",
+    }),
+    []
+  );
+
+  if (!apiBase) {
     return (
       <main style={shell}>
         <div style={card}>
-          <h1 style={title}>WX 网页聊天</h1>
-          <p style={{ color: "var(--muted)", margin: "0 0 1rem" }}>
-            请先在 Vercel 项目环境变量中设置{" "}
-            <code style={code}>NEXT_PUBLIC_SOCKET_URL</code> 为你的 Render 后端地址（例如{" "}
-            <code style={code}>https://你的服务.onrender.com</code>），然后重新部署。
+          <h1 style={title}>微信风格聊天</h1>
+          <p style={{ color: "var(--muted)", margin: 0 }}>
+            请在 Vercel 环境变量中设置{" "}
+            <code style={code}>NEXT_PUBLIC_SOCKET_URL</code> 为 Render 后端地址。
           </p>
         </div>
       </main>
     );
   }
 
-  return (
-    <main style={shell}>
-      <div style={card}>
-        <header style={header}>
-          <h1 style={title}>WX 网页聊天</h1>
-          <span
-            style={{
-              fontSize: "0.8rem",
-              color:
-                status === "connected"
-                  ? "var(--accent)"
-                  : status === "error"
-                    ? "var(--danger)"
-                    : "var(--muted)",
-            }}
-          >
-            {status === "connected"
-              ? "已连接"
-              : status === "connecting"
-                ? "连接中…"
-                : status === "error"
-                  ? "连接异常"
-                  : "未进入房间"}
-          </span>
-        </header>
-
-        {!joined ? (
+  if (screen === "login" || screen === "register") {
+    return (
+      <main style={shell}>
+        <div style={card}>
+          <header style={header}>
+            <h1 style={title}>{screen === "login" ? "登录" : "注册账号"}</h1>
+          </header>
+          <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: 0 }}>
+            账号相当于微信号（3–32 位小写字母、数字、下划线），注册后可添加好友再聊天。
+          </p>
           <section style={formSection}>
             <label style={label}>
-              后端地址（只读）
-              <input style={inputStyle} readOnly value={serverUrl} />
-            </label>
-            <label style={label}>
-              房间号（跨设备相同即可互聊）
+              账号
               <input
                 style={inputStyle}
-                placeholder="例如 family / project-a"
-                value={roomId}
-                onChange={(e) => setRoomId(e.target.value)}
-                autoComplete="off"
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="例如 zhangsan"
               />
             </label>
             <label style={label}>
-              昵称
+              密码 {screen === "register" && <span style={{ fontWeight: 400 }}>（至少 6 位）</span>}
               <input
                 style={inputStyle}
-                value={nickname}
-                onChange={(e) => setNickname(e.target.value)}
-                maxLength={32}
+                type="password"
+                autoComplete={screen === "login" ? "current-password" : "new-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
               />
             </label>
-            {err && <p style={{ color: "var(--danger)", margin: "0 0 0.5rem" }}>{err}</p>}
+            {screen === "register" && (
+              <label style={label}>
+                显示名称
+                <input
+                  style={inputStyle}
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder="好友看到的名字"
+                  maxLength={32}
+                />
+              </label>
+            )}
+            {formErr && <p style={{ color: "var(--danger)", margin: 0 }}>{formErr}</p>}
             <button
               type="button"
               style={btnPrimary}
-              disabled={!canJoin || status === "connecting"}
-              onClick={connectAndJoin}
+              onClick={screen === "login" ? onLogin : onRegister}
             >
-              进入房间
+              {screen === "login" ? "登录" : "注册并进入"}
+            </button>
+            <button
+              type="button"
+              style={btnGhost}
+              onClick={() => {
+                setFormErr(null);
+                setScreen(screen === "login" ? "register" : "login");
+              }}
+            >
+              {screen === "login" ? "没有账号？去注册" : "已有账号？去登录"}
             </button>
           </section>
-        ) : (
-          <>
-            <div style={roomBar}>
-              <span>
-                房间 <strong>{roomId.trim()}</strong>
-              </span>
-              <button type="button" style={btnGhost} onClick={disconnect}>
-                离开
-              </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main style={layoutMain}>
+      <div style={mainRow}>
+        <aside style={sidebar}>
+          <div style={sideHead}>
+            <div>
+              <div style={{ fontWeight: 600 }}>{me?.displayName}</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{me?.username}</div>
             </div>
-            <div ref={listRef} style={msgList}>
-              {presence.map((p, i) => (
-                <div key={`${p.ts}-${i}`} style={systemLine}>
-                  {p.type === "join" ? "→" : "←"} {p.nickname}{" "}
-                  {p.type === "join" ? "加入" : "离开"}
-                </div>
-              ))}
-              {messages.map((m) => {
-                const mine = m.from === nickname.trim();
-                return (
+            <button type="button" style={btnGhost} onClick={logout}>
+              退出
+            </button>
+          </div>
+          <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 8 }}>
+            实时连接：
+            {socketStatus === "on" ? "已连接" : socketStatus === "connecting" ? "连接中…" : socketStatus === "err" ? "失败" : "未连接"}
+          </div>
+
+          <div style={sectionTitle}>新朋友</div>
+          {incoming.length === 0 && (
+            <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>暂无申请</div>
+          )}
+          {incoming.map((r) => (
+            <div key={r.id} style={incomingRow}>
+              <div>
+                <div style={{ fontWeight: 500 }}>{r.from_display_name}</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{r.from_username}</div>
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button type="button" style={btnMini} onClick={() => onAccept(r.id)}>
+                  接受
+                </button>
+                <button type="button" style={btnMiniGhost} onClick={() => onReject(r.id)}>
+                  拒绝
+                </button>
+              </div>
+            </div>
+          ))}
+
+          <div style={{ ...sectionTitle, marginTop: 12 }}>添加好友</div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input
+              style={{ ...inputStyle, flex: 1, margin: 0 }}
+              placeholder="对方账号"
+              value={addTarget}
+              onChange={(e) => setAddTarget(e.target.value)}
+            />
+            <button type="button" style={btnMini} onClick={onAddFriend}>
+              添加
+            </button>
+          </div>
+          {addMsg && <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>{addMsg}</div>}
+
+          <div style={sectionTitle}>好友</div>
+          <div style={friendList}>
+            {friends.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => openChat(f)}
+                style={{
+                  ...friendItem,
+                  background: selected?.id === f.id ? "var(--border)" : "transparent",
+                }}
+              >
+                <div style={{ fontWeight: 500 }}>{f.display_name}</div>
+                <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>@{f.username}</div>
+              </button>
+            ))}
+            {friends.length === 0 && (
+              <div style={{ fontSize: "0.85rem", color: "var(--muted)", padding: "8px 0" }}>
+                还没有好友，先添加对方账号发送申请。
+              </div>
+            )}
+          </div>
+        </aside>
+
+        <section style={chatPane}>
+          {!selected ? (
+            <div style={emptyChat}>选择一位好友开始聊天</div>
+          ) : (
+            <>
+              <div style={chatTop}>
+                <span style={{ fontWeight: 600 }}>{selected.display_name}</span>
+                <span style={{ fontSize: "0.8rem", color: "var(--muted)", marginLeft: 8 }}>
+                  @{selected.username}
+                </span>
+              </div>
+              <div ref={listRef} style={msgList}>
+                {messages.map((m) => (
                   <div
                     key={m.id}
                     style={{
                       ...bubbleRow,
-                      justifyContent: mine ? "flex-end" : "flex-start",
+                      justifyContent: m.fromMe ? "flex-end" : "flex-start",
                     }}
                   >
                     <div
                       style={{
                         ...bubble,
-                        background: mine ? "var(--bubble-me)" : "var(--bubble-them)",
-                        color: mine ? "#fff" : "var(--text)",
+                        background: m.fromMe ? "var(--bubble-me)" : "var(--bubble-them)",
+                        color: m.fromMe ? "#fff" : "var(--text)",
                       }}
                     >
-                      {!mine && <div style={nameTag}>{m.from}</div>}
-                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                        {m.text}
-                      </div>
+                      {!m.fromMe && m.fromLabel && <div style={nameTag}>{m.fromLabel}</div>}
+                      <div style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
                       <div style={timeTag}>
                         {new Date(m.ts).toLocaleTimeString("zh-CN", {
                           hour: "2-digit",
@@ -264,28 +552,28 @@ export function ChatApp() {
                       </div>
                     </div>
                   </div>
-                );
-              })}
-            </div>
-            <div style={composer}>
-              <input
-                style={{ ...inputStyle, flex: 1 }}
-                placeholder="输入消息，Enter 发送"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-              />
-              <button type="button" style={btnPrimary} onClick={send} disabled={!input.trim()}>
-                发送
-              </button>
-            </div>
-          </>
-        )}
+                ))}
+              </div>
+              <div style={composer}>
+                <input
+                  style={{ ...inputStyle, flex: 1 }}
+                  placeholder="发消息…"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      sendDm();
+                    }
+                  }}
+                />
+                <button type="button" style={btnPrimary} onClick={sendDm} disabled={!input.trim()}>
+                  发送
+                </button>
+              </div>
+            </>
+          )}
+        </section>
       </div>
     </main>
   );
@@ -299,9 +587,93 @@ const shell: CSSProperties = {
   padding: "1rem",
 };
 
+const mainRow: CSSProperties = {
+  display: "flex",
+  width: "100%",
+  minHeight: "min(88vh, 640px)",
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  overflow: "hidden",
+  boxShadow: "0 12px 40px rgba(0,0,0,0.35)",
+};
+
+const sidebar: CSSProperties = {
+  width: 280,
+  flexShrink: 0,
+  borderRight: "1px solid var(--border)",
+  padding: "12px",
+  display: "flex",
+  flexDirection: "column",
+  background: "var(--bg)",
+};
+
+const sideHead: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  marginBottom: 12,
+  gap: 8,
+};
+
+const sectionTitle: CSSProperties = {
+  fontSize: "0.75rem",
+  color: "var(--muted)",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+  marginBottom: 6,
+};
+
+const incomingRow: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  padding: "8px 0",
+  borderBottom: "1px solid var(--border)",
+  fontSize: "0.85rem",
+};
+
+const friendList: CSSProperties = {
+  flex: 1,
+  overflowY: "auto",
+  marginTop: 4,
+};
+
+const friendItem: CSSProperties = {
+  width: "100%",
+  textAlign: "left",
+  padding: "10px 8px",
+  border: "none",
+  borderRadius: 8,
+  cursor: "pointer",
+  color: "var(--text)",
+  marginBottom: 4,
+};
+
+const chatPane: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  flexDirection: "column",
+  minWidth: 0,
+  background: "var(--surface)",
+};
+
+const emptyChat: CSSProperties = {
+  flex: 1,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  color: "var(--muted)",
+};
+
+const chatTop: CSSProperties = {
+  padding: "12px 16px",
+  borderBottom: "1px solid var(--border)",
+};
+
 const card: CSSProperties = {
   width: "100%",
-  maxWidth: 480,
+  maxWidth: 400,
   background: "var(--surface)",
   border: "1px solid var(--border)",
   borderRadius: 12,
@@ -313,8 +685,7 @@ const header: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  marginBottom: "1rem",
-  gap: "0.75rem",
+  marginBottom: "0.5rem",
 };
 
 const title: CSSProperties = {
@@ -368,22 +739,30 @@ const btnGhost: CSSProperties = {
   fontSize: "0.85rem",
 };
 
-const roomBar: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  marginBottom: "0.75rem",
-  fontSize: "0.9rem",
+const btnMini: CSSProperties = {
+  padding: "4px 10px",
+  borderRadius: 6,
+  border: "none",
+  background: "var(--accent)",
+  color: "#fff",
+  fontSize: "0.8rem",
+  cursor: "pointer",
+};
+
+const btnMiniGhost: CSSProperties = {
+  padding: "4px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--border)",
+  background: "transparent",
   color: "var(--muted)",
+  fontSize: "0.8rem",
+  cursor: "pointer",
 };
 
 const msgList: CSSProperties = {
-  height: "min(52vh, 420px)",
+  flex: 1,
   overflowY: "auto",
-  padding: "4px 0",
-  marginBottom: "0.75rem",
-  borderTop: "1px solid var(--border)",
-  borderBottom: "1px solid var(--border)",
+  padding: "12px 16px",
 };
 
 const bubbleRow: CSSProperties = {
@@ -392,7 +771,7 @@ const bubbleRow: CSSProperties = {
 };
 
 const bubble: CSSProperties = {
-  maxWidth: "88%",
+  maxWidth: "78%",
   padding: "8px 12px",
   borderRadius: 12,
   fontSize: "0.95rem",
@@ -411,16 +790,11 @@ const timeTag: CSSProperties = {
   textAlign: "right",
 };
 
-const systemLine: CSSProperties = {
-  textAlign: "center",
-  fontSize: "0.75rem",
-  color: "var(--muted)",
-  margin: "0.35rem 0",
-};
-
 const composer: CSSProperties = {
   display: "flex",
   gap: 8,
+  padding: "12px 16px",
+  borderTop: "1px solid var(--border)",
   alignItems: "center",
 };
 

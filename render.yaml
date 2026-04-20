@@ -14,3 +14,9 @@ services:
       # 部署完 Vercel 后，把前端地址填进来（多个用英文逗号）
       - key: CORS_ORIGIN
         sync: false
+      # 随机长字符串，用于登录 Token（必填）
+      - key: JWT_SECRET
+        sync: false
+      # 推荐：在 Render 创建 PostgreSQL 后粘贴 Internal Database URL
+      - key: DATABASE_URL
+        sync: false
