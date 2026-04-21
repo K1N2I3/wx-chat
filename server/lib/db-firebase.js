@@ -35,6 +35,11 @@ async function createFirebaseDb() {
   const reqCol = db.collection("friend_requests");
   const friendsCol = db.collection("friendships");
   const msgsCol = db.collection("messages");
+  const convCol = db.collection("conversations");
+
+  function convId(a, b) {
+    return [a, b].sort().join(":");
+  }
 
   async function findUserByUsername(username) {
     const snap = await usersCol.where("username", "==", username).limit(1).get();
@@ -160,33 +165,65 @@ async function createFirebaseDb() {
     const [lo, hi] = [user_low, user_high].sort();
     const id = randomUUID();
     const ts = Date.now();
-    await msgsCol.doc(id).set({
+    const cid = convId(lo, hi);
+    const row = {
       user_low: lo,
       user_high: hi,
       sender_id,
       body,
       ts,
+    };
+    await msgsCol.doc(id).set({
+      ...row,
+      conv_id: cid,
     });
+    await convCol.doc(cid).collection("messages").doc(id).set(row);
     return { id, sender_id, body, ts };
   }
 
   async function listMessages(user_low, user_high, limit = 100) {
     const [lo, hi] = [user_low, user_high].sort();
-    const snap = await msgsCol
-      .where("user_low", "==", lo)
-      .where("user_high", "==", hi)
+    const cid = convId(lo, hi);
+
+    // 优先走会话子集合，避免复合索引要求导致刷新取历史失败
+    const sub = await convCol
+      .doc(cid)
+      .collection("messages")
       .orderBy("ts", "asc")
       .limit(limit)
       .get();
-    return snap.docs.map((d) => {
-      const m = d.data();
-      return {
-        id: d.id,
-        sender_id: m.sender_id,
-        body: m.body,
-        ts: m.ts,
-      };
-    });
+    if (!sub.empty) {
+      return sub.docs.map((d) => {
+        const m = d.data();
+        return {
+          id: d.id,
+          sender_id: m.sender_id,
+          body: m.body,
+          ts: m.ts,
+        };
+      });
+    }
+
+    // 兼容旧数据：回退读取旧 messages 结构（可能需要索引）
+    try {
+      const snap = await msgsCol
+        .where("user_low", "==", lo)
+        .where("user_high", "==", hi)
+        .orderBy("ts", "asc")
+        .limit(limit)
+        .get();
+      return snap.docs.map((d) => {
+        const m = d.data();
+        return {
+          id: d.id,
+          sender_id: m.sender_id,
+          body: m.body,
+          ts: m.ts,
+        };
+      });
+    } catch {
+      return [];
+    }
   }
 
   return {
