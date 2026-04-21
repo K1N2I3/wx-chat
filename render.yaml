@@ -9,6 +9,7 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
+      # MongoDB TLS 若在 Render 报错，可改为 "18" 再部署
       - key: NODE_VERSION
         value: "20"
       # 部署完 Vercel 后，把前端地址填进来（多个用英文逗号）

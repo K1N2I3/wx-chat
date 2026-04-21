@@ -1,5 +1,11 @@
 const { randomUUID } = require("crypto");
+const dns = require("dns");
 const { MongoClient } = require("mongodb");
+
+/** Render / Node 20+ 默认会双栈选路，Atlas 上易触发 TLS alert 80，优先 IPv4 */
+if (process.env.MONGODB_PREFER_IPV6 !== "1" && typeof dns.setDefaultResultOrder === "function") {
+  dns.setDefaultResultOrder("ipv4first");
+}
 
 /**
  * MongoDB 实现：与 PostgreSQL / SQLite 相同的数据访问接口。
@@ -26,19 +32,40 @@ function buildMongoClientOptions() {
     serverSelectionTimeoutMS: 25_000,
     connectTimeoutMS: 20_000,
     maxPoolSize: 10,
+    retryWrites: true,
+    appName: "wx-chat-server",
   };
-  /** Render 等环境 IPv6 链路到 Atlas 时偶发 TLS alert 80，默认强制 IPv4 */
+  /** Node 20+ 默认 autoSelectFamily，会尝试 IPv6，与 family:4 冲突时仍可能 TLS 失败 */
   if (process.env.MONGODB_PREFER_IPV6 !== "1") {
     opts.family = 4;
+    opts.autoSelectFamily = false;
   }
   return opts;
 }
 
+/** 保证 URI 含常用参数，避免 Atlas 连接串被截断 */
+function normalizeMongoUri(uri) {
+  const u = uri.trim();
+  if (!u.startsWith("mongodb://") && !u.startsWith("mongodb+srv://")) return u;
+  const hasQuery = u.includes("?");
+  const sep = hasQuery ? "&" : "?";
+  const need = [];
+  if (!/[?&]retryWrites=/.test(u)) need.push("retryWrites=true");
+  if (!/[?&]w=/.test(u)) need.push("w=majority");
+  if (!need.length) return u;
+  return u + sep + need.join("&");
+}
+
 async function createMongoDb(uri) {
+  const connectUri = normalizeMongoUri(uri);
+  if (connectUri !== uri.trim()) {
+    console.log("[db] 已补全 URI 查询参数（retryWrites / w）");
+  }
+
   let client;
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    client = new MongoClient(uri, buildMongoClientOptions());
+    client = new MongoClient(connectUri, buildMongoClientOptions());
     try {
       await client.connect();
       lastErr = undefined;
@@ -59,7 +86,7 @@ async function createMongoDb(uri) {
   if (!client && lastErr) {
     const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
     console.error(
-      "[db] MongoDB 连接失败。请检查：1) MONGODB_URI 是否正确（密码特殊字符需 URL 编码）2) Atlas → Network Access 添加 0.0.0.0/0 或 Render 出口 IP 3) 用户名与 Database User 密码",
+      "[db] MongoDB 连接失败。请检查：1) MONGODB_URI 密码是否已 URL 编码 2) Atlas → Network Access 是否放行 0.0.0.0/0 3) 若仍报 TLS alert 80：在 Atlas「Connect」改用 **Standard connection string**（非 SRV）粘贴到 MONGODB_URI，或把 Render 的 Node 改为 18.x 再试",
       "\n详情:",
       msg
     );
