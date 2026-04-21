@@ -21,17 +21,24 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-const mongoClientOpts = {
-  serverSelectionTimeoutMS: 25_000,
-  connectTimeoutMS: 20_000,
-  maxPoolSize: 10,
-};
+function buildMongoClientOptions() {
+  const opts = {
+    serverSelectionTimeoutMS: 25_000,
+    connectTimeoutMS: 20_000,
+    maxPoolSize: 10,
+  };
+  /** Render 等环境 IPv6 链路到 Atlas 时偶发 TLS alert 80，默认强制 IPv4 */
+  if (process.env.MONGODB_PREFER_IPV6 !== "1") {
+    opts.family = 4;
+  }
+  return opts;
+}
 
 async function createMongoDb(uri) {
   let client;
   let lastErr;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    client = new MongoClient(uri, mongoClientOpts);
+    client = new MongoClient(uri, buildMongoClientOptions());
     try {
       await client.connect();
       lastErr = undefined;
