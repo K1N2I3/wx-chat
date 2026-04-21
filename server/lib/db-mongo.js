@@ -253,6 +253,7 @@ async function createMongoDb(uri) {
       sender_id,
       body,
       created_ms,
+      read_by_recipient: false,
     });
     return { id, sender_id, body, ts: created_ms };
   }
@@ -269,7 +270,39 @@ async function createMongoDb(uri) {
       sender_id: m.sender_id,
       body: m.body,
       ts: m.created_ms,
+      read_by_recipient: !!m.read_by_recipient,
     }));
+  }
+
+  async function markMessagesRead(reader_id, peer_id) {
+    const [lo, hi] = [reader_id, peer_id].sort();
+    const r = await messages.updateMany(
+      {
+        user_low: lo,
+        user_high: hi,
+        sender_id: peer_id,
+        read_by_recipient: { $ne: true },
+      },
+      { $set: { read_by_recipient: true } }
+    );
+    return r.modifiedCount || 0;
+  }
+
+  async function getUnreadCounts(userId) {
+    const cursor = messages.aggregate([
+      {
+        $match: {
+          $or: [{ user_low: userId }, { user_high: userId }],
+          sender_id: { $ne: userId },
+          read_by_recipient: { $ne: true },
+        },
+      },
+      { $group: { _id: "$sender_id", unread: { $sum: 1 } } },
+    ]);
+    const rows = await cursor.toArray();
+    const out = {};
+    for (const r of rows) out[r._id] = Number(r.unread || 0);
+    return out;
   }
 
   return {
@@ -289,6 +322,8 @@ async function createMongoDb(uri) {
     listFriends,
     insertMessage,
     listMessages,
+    markMessagesRead,
+    getUnreadCounts,
   };
 }
 

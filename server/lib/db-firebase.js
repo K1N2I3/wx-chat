@@ -172,6 +172,7 @@ async function createFirebaseDb() {
       sender_id,
       body,
       ts,
+      read_by_recipient: false,
     };
     await msgsCol.doc(id).set({
       ...row,
@@ -200,6 +201,7 @@ async function createFirebaseDb() {
           sender_id: m.sender_id,
           body: m.body,
           ts: m.ts,
+          read_by_recipient: !!m.read_by_recipient,
         };
       });
     }
@@ -219,11 +221,46 @@ async function createFirebaseDb() {
           sender_id: m.sender_id,
           body: m.body,
           ts: m.ts,
+          read_by_recipient: !!m.read_by_recipient,
         };
       });
     } catch {
       return [];
     }
+  }
+
+  async function markMessagesRead(reader_id, peer_id) {
+    const [lo, hi] = [reader_id, peer_id].sort();
+    const cid = convId(lo, hi);
+    const snap = await convCol
+      .doc(cid)
+      .collection("messages")
+      .where("sender_id", "==", peer_id)
+      .where("read_by_recipient", "==", false)
+      .get();
+    if (snap.empty) return 0;
+    const batch = db.batch();
+    for (const d of snap.docs) {
+      batch.update(d.ref, { read_by_recipient: true });
+      batch.update(msgsCol.doc(d.id), { read_by_recipient: true });
+    }
+    await batch.commit();
+    return snap.size;
+  }
+
+  async function getUnreadCounts(userId) {
+    const [asLow, asHigh] = await Promise.all([
+      msgsCol.where("user_low", "==", userId).where("read_by_recipient", "==", false).get(),
+      msgsCol.where("user_high", "==", userId).where("read_by_recipient", "==", false).get(),
+    ]);
+    const out = {};
+    const all = [...asLow.docs, ...asHigh.docs];
+    for (const d of all) {
+      const m = d.data();
+      if (!m || m.sender_id === userId) continue;
+      out[m.sender_id] = (out[m.sender_id] || 0) + 1;
+    }
+    return out;
   }
 
   return {
@@ -242,6 +279,8 @@ async function createFirebaseDb() {
     listFriends,
     insertMessage,
     listMessages,
+    markMessagesRead,
+    getUnreadCounts,
   };
 }
 

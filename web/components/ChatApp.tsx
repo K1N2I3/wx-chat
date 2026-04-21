@@ -24,9 +24,18 @@ type UiMessage = {
   ts: number;
   fromMe: boolean;
   fromLabel?: string;
+  readByRecipient?: boolean;
 };
 
 type PeerPreview = { text: string; ts: number };
+
+function mergeMessages(prev: UiMessage[], incoming: UiMessage[]) {
+  if (incoming.length === 0) return prev;
+  const byId = new Map<string, UiMessage>();
+  for (const m of prev) byId.set(m.id, m);
+  for (const m of incoming) byId.set(m.id, m);
+  return Array.from(byId.values()).sort((a, b) => a.ts - b.ts);
+}
 
 function dmCacheKey(meId: string, peerId: string) {
   const [a, b] = [meId, peerId].sort();
@@ -155,6 +164,7 @@ export function ChatApp() {
   const [listSearch, setListSearch] = useState("");
   const [addPanelOpen, setAddPanelOpen] = useState(false);
   const [peerPreview, setPeerPreview] = useState<Record<string, PeerPreview>>({});
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [isCompact, setIsCompact] = useState(false);
 
   const [selected, setSelected] = useState<Friend | null>(null);
@@ -304,22 +314,22 @@ export function ChatApp() {
         { peerUserId: f.id },
         (res: {
           ok?: boolean;
-          history?: { id: string; text: string; ts: number; fromMe: boolean }[];
+          history?: { id: string; text: string; ts: number; fromMe: boolean; readByRecipient?: boolean }[];
         }) => {
           if (!res?.ok) {
-            setMessages([]);
+            // 历史拉取失败时保留当前消息，避免“闪现后消失”
             return;
           }
           const hist = res.history || [];
-          setMessages(
-            hist.map((m) => ({
-              id: m.id,
-              text: m.text,
-              ts: m.ts,
-              fromMe: m.fromMe,
-              fromLabel: f.display_name,
-            }))
-          );
+          const incoming = hist.map((m) => ({
+            id: m.id,
+            text: m.text,
+            ts: m.ts,
+            fromMe: m.fromMe,
+            fromLabel: f.display_name,
+            readByRecipient: m.readByRecipient,
+          }));
+          setMessages((prev) => mergeMessages(prev, incoming));
           const last = hist[hist.length - 1];
           if (last) bumpPreview(f.id, last.text);
         }
@@ -359,6 +369,7 @@ export function ChatApp() {
         ts: number;
         fromUserId: string;
         fromDisplayName?: string;
+        readByRecipient?: boolean;
       }) => {
         const self = meRef.current;
         const sel = selectedRef.current;
@@ -370,6 +381,9 @@ export function ChatApp() {
         }
         if (!sel) return;
         if (payload.fromUserId !== self.id && payload.fromUserId !== sel.id) return;
+        if (payload.fromUserId === sel.id) {
+          socketRef.current?.emit("mark_dm_read", { peerUserId: sel.id }, () => {});
+        }
         setMessages((prev) => {
           if (prev.some((m) => m.id === payload.id)) return prev;
           return [
@@ -380,11 +394,25 @@ export function ChatApp() {
               ts: payload.ts,
               fromMe: payload.fromUserId === self.id,
               fromLabel: payload.fromDisplayName || sel.display_name,
+              readByRecipient: payload.readByRecipient,
             },
           ];
         });
       }
     );
+
+    s.on("unread_counts", (payload: { counts?: Record<string, number> }) => {
+      setUnreadCounts(payload?.counts || {});
+    });
+
+    s.on("dm_read", (payload: { readerUserId: string; peerUserId: string }) => {
+      const self = meRef.current;
+      if (!self) return;
+      if (payload.readerUserId !== selectedRef.current?.id) return;
+      setMessages((prev) =>
+        prev.map((m) => (m.fromMe ? { ...m, readByRecipient: true } : m))
+      );
+    });
 
     return () => {
       s.removeAllListeners();
@@ -404,13 +432,16 @@ export function ChatApp() {
     (f: Friend) => {
       setSelected(f);
       selectedRef.current = f;
+      setUnreadCounts((prev) => ({ ...prev, [f.id]: 0 }));
       if (me?.id) {
         const cached = readDmCache(me.id, f.id);
-        setMessages(cached);
+        if (cached.length > 0) setMessages(cached);
       } else {
         setMessages([]);
       }
       joinDmRoom(f);
+      const s = socketRef.current;
+      if (s?.connected) s.emit("mark_dm_read", { peerUserId: f.id }, () => {});
     },
     [joinDmRoom, me?.id]
   );
@@ -741,6 +772,11 @@ export function ChatApp() {
                       {pv ? pv.text : `@${f.username}`}
                     </div>
                   </div>
+                  {selected?.id !== f.id && (unreadCounts[f.id] || 0) > 0 && (
+                    <span className="wxd-unread-dot">
+                      {unreadCounts[f.id] > 99 ? "99+" : unreadCounts[f.id]}
+                    </span>
+                  )}
                 </button>
               );
             })
@@ -779,6 +815,11 @@ export function ChatApp() {
                         minute: "2-digit",
                       })}
                     </time>
+                    {m.fromMe && (
+                      <div className="wxd-read-flag">
+                        {m.readByRecipient ? "已读" : "未读"}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

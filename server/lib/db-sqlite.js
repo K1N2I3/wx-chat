@@ -40,10 +40,15 @@ function createSqliteDb(filePath) {
       user_high TEXT NOT NULL,
       sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       body TEXT NOT NULL,
-      created_ms INTEGER NOT NULL
+      created_ms INTEGER NOT NULL,
+      read_by_recipient INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(user_low, user_high, created_ms);
   `);
+  const msgCols = db.prepare(`PRAGMA table_info(messages)`).all();
+  if (!msgCols.some((c) => c.name === "read_by_recipient")) {
+    db.exec(`ALTER TABLE messages ADD COLUMN read_by_recipient INTEGER NOT NULL DEFAULT 0;`);
+  }
 
   async function findUserByUsername(username) {
     return (
@@ -149,7 +154,7 @@ function createSqliteDb(filePath) {
     const id = randomUUID();
     const created_ms = Date.now();
     db.prepare(
-      `INSERT INTO messages (id, user_low, user_high, sender_id, body, created_ms) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO messages (id, user_low, user_high, sender_id, body, created_ms, read_by_recipient) VALUES (?, ?, ?, ?, ?, ?, 0)`
     ).run(id, lo, hi, sender_id, body, created_ms);
     return { id, sender_id, body, ts: created_ms };
   }
@@ -158,7 +163,7 @@ function createSqliteDb(filePath) {
     const [lo, hi] = [user_low, user_high].sort();
     const rows = db
       .prepare(
-        `SELECT id, sender_id, body, created_ms as ts FROM messages
+        `SELECT id, sender_id, body, created_ms as ts, read_by_recipient FROM messages
          WHERE user_low = ? AND user_high = ? ORDER BY created_ms ASC LIMIT ?`
       )
       .all(lo, hi, limit);
@@ -167,7 +172,36 @@ function createSqliteDb(filePath) {
       sender_id: r.sender_id,
       body: r.body,
       ts: r.ts,
+      read_by_recipient: !!r.read_by_recipient,
     }));
+  }
+
+  async function markMessagesRead(reader_id, peer_id) {
+    const [lo, hi] = [reader_id, peer_id].sort();
+    const r = db
+      .prepare(
+        `UPDATE messages
+         SET read_by_recipient = 1
+         WHERE user_low = ? AND user_high = ? AND sender_id = ? AND read_by_recipient = 0`
+      )
+      .run(lo, hi, peer_id);
+    return r.changes || 0;
+  }
+
+  async function getUnreadCounts(userId) {
+    const rows = db
+      .prepare(
+        `SELECT sender_id, COUNT(*) as unread
+         FROM messages
+         WHERE (user_low = ? OR user_high = ?)
+           AND sender_id != ?
+           AND read_by_recipient = 0
+         GROUP BY sender_id`
+      )
+      .all(userId, userId, userId);
+    const out = {};
+    for (const r of rows) out[r.sender_id] = Number(r.unread || 0);
+    return out;
   }
 
   return {
@@ -187,6 +221,8 @@ function createSqliteDb(filePath) {
     listFriends,
     insertMessage,
     listMessages,
+    markMessagesRead,
+    getUnreadCounts,
   };
 }
 

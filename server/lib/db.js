@@ -140,6 +140,7 @@ function createMemoryDb() {
       sender_id,
       body,
       created_at: new Date().toISOString(),
+      read_by_recipient: false,
     };
     messages.push(row);
     const ts = new Date(row.created_at).getTime();
@@ -154,7 +155,33 @@ function createMemoryDb() {
       sender_id: m.sender_id,
       body: m.body,
       ts: new Date(m.created_at).getTime(),
+      read_by_recipient: !!m.read_by_recipient,
     }));
+  }
+
+  async function markMessagesRead(reader_id, peer_id) {
+    let changed = 0;
+    for (const m of messages) {
+      if (
+        (m.user_low === reader_id || m.user_high === reader_id) &&
+        m.sender_id === peer_id &&
+        !m.read_by_recipient
+      ) {
+        m.read_by_recipient = true;
+        changed++;
+      }
+    }
+    return changed;
+  }
+
+  async function getUnreadCounts(userId) {
+    const out = {};
+    for (const m of messages) {
+      if ((m.user_low === userId || m.user_high === userId) && m.sender_id !== userId && !m.read_by_recipient) {
+        out[m.sender_id] = (out[m.sender_id] || 0) + 1;
+      }
+    }
+    return out;
   }
 
   return {
@@ -172,6 +199,8 @@ function createMemoryDb() {
     listFriends,
     insertMessage,
     listMessages,
+    markMessagesRead,
+    getUnreadCounts,
     findRequestById,
   };
 }
@@ -207,8 +236,10 @@ function createPgDb(pool) {
         user_high UUID NOT NULL,
         sender_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         body TEXT NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        read_by_recipient BOOLEAN NOT NULL DEFAULT FALSE
       );
+      ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_by_recipient BOOLEAN NOT NULL DEFAULT FALSE;
       CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(user_low, user_high, created_at);
     `);
   }
@@ -320,7 +351,7 @@ function createPgDb(pool) {
     const [lo, hi] = [user_low, user_high].sort();
     const { rows } = await pool.query(
       `INSERT INTO messages (user_low, user_high, sender_id, body) VALUES ($1,$2,$3,$4)
-       RETURNING id::text, user_low::text, user_high::text, sender_id::text, body, (extract(epoch from created_at)*1000)::bigint as ts`,
+       RETURNING id::text, user_low::text, user_high::text, sender_id::text, body, (extract(epoch from created_at)*1000)::bigint as ts, read_by_recipient`,
       [lo, hi, sender_id, body]
     );
     return rows[0];
@@ -329,11 +360,37 @@ function createPgDb(pool) {
   async function listMessages(user_low, user_high, limit = 100) {
     const [lo, hi] = [user_low, user_high].sort();
     const { rows } = await pool.query(
-      `SELECT id::text, sender_id::text, body, (extract(epoch from created_at)*1000)::bigint as ts
+      `SELECT id::text, sender_id::text, body, (extract(epoch from created_at)*1000)::bigint as ts, read_by_recipient
        FROM messages WHERE user_low=$1 AND user_high=$2 ORDER BY created_at ASC LIMIT $3`,
       [lo, hi, limit]
     );
     return rows;
+  }
+
+  async function markMessagesRead(reader_id, peer_id) {
+    const [lo, hi] = [reader_id, peer_id].sort();
+    const { rowCount } = await pool.query(
+      `UPDATE messages
+       SET read_by_recipient = TRUE
+       WHERE user_low=$1 AND user_high=$2 AND sender_id=$3 AND read_by_recipient=FALSE`,
+      [lo, hi, peer_id]
+    );
+    return rowCount || 0;
+  }
+
+  async function getUnreadCounts(userId) {
+    const { rows } = await pool.query(
+      `SELECT sender_id::text AS sender_id, COUNT(*)::int AS unread
+       FROM messages
+       WHERE (user_low=$1 OR user_high=$1)
+         AND sender_id != $1
+         AND read_by_recipient = FALSE
+       GROUP BY sender_id`,
+      [userId]
+    );
+    const out = {};
+    for (const r of rows) out[r.sender_id] = Number(r.unread || 0);
+    return out;
   }
 
   return {
@@ -353,6 +410,8 @@ function createPgDb(pool) {
     listFriends,
     insertMessage,
     listMessages,
+    markMessagesRead,
+    getUnreadCounts,
   };
 }
 

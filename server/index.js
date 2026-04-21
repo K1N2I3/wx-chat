@@ -228,6 +228,16 @@ function dmRoomKey(a, b) {
 }
 
 function registerSocketIO(io, db) {
+  async function emitUnreadCounts(userId) {
+    if (!db.getUnreadCounts) return;
+    try {
+      const counts = await db.getUnreadCounts(userId);
+      io.to(`user:${userId}`).emit("unread_counts", { counts });
+    } catch (e) {
+      console.error("emitUnreadCounts error:", e);
+    }
+  }
+
   io.use((socket, next) => {
     try {
       const token =
@@ -250,6 +260,7 @@ function registerSocketIO(io, db) {
   io.on("connection", (socket) => {
     const uid = socket.data.userId;
     socket.join(`user:${uid}`);
+    emitUnreadCounts(uid);
 
     socket.on("join_dm", async ({ peerUserId }, cb) => {
       try {
@@ -275,7 +286,19 @@ function registerSocketIO(io, db) {
           text: m.body,
           ts: Number(m.ts),
           fromMe: m.sender_id === uid,
+          readByRecipient: !!m.read_by_recipient,
         }));
+        const readChanged = db.markMessagesRead
+          ? await db.markMessagesRead(uid, peer)
+          : 0;
+        if (readChanged > 0) {
+          io.to(room).emit("dm_read", {
+            readerUserId: uid,
+            peerUserId: peer,
+            ts: Date.now(),
+          });
+        }
+        await emitUnreadCounts(uid);
         if (typeof cb === "function") cb({ ok: true, history });
       } catch (e) {
         console.error(e);
@@ -311,13 +334,43 @@ function registerSocketIO(io, db) {
           fromUserId: uid,
           fromUsername: socket.data.username,
           fromDisplayName: socket.data.displayName,
+          readByRecipient: false,
         };
         const room = dmRoomKey(uid, peer);
         io.to(room).emit("dm_message", payload);
+        await emitUnreadCounts(peer);
+        await emitUnreadCounts(uid);
         if (typeof cb === "function") cb({ ok: true, id: saved.id, ts });
       } catch (e) {
         console.error(e);
         if (typeof cb === "function") cb({ ok: false, error: "发送失败" });
+      }
+    });
+
+    socket.on("mark_dm_read", async ({ peerUserId }, cb) => {
+      try {
+        const peer = String(peerUserId || "").trim();
+        if (!peer || peer === uid) {
+          if (typeof cb === "function") cb({ ok: false });
+          return;
+        }
+        if (!(await db.areFriends(uid, peer))) {
+          if (typeof cb === "function") cb({ ok: false, error: "仅可与好友聊天" });
+          return;
+        }
+        const changed = db.markMessagesRead ? await db.markMessagesRead(uid, peer) : 0;
+        if (changed > 0) {
+          io.to(dmRoomKey(uid, peer)).emit("dm_read", {
+            readerUserId: uid,
+            peerUserId: peer,
+            ts: Date.now(),
+          });
+        }
+        await emitUnreadCounts(uid);
+        if (typeof cb === "function") cb({ ok: true, changed });
+      } catch (e) {
+        console.error(e);
+        if (typeof cb === "function") cb({ ok: false, error: "已读同步失败" });
       }
     });
 
