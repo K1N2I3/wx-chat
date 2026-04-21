@@ -372,12 +372,39 @@ function resolvePostgresUrl() {
 }
 
 async function createDb() {
+  const firebaseJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const hasFirebaseFields =
+    process.env.FIREBASE_PROJECT_ID &&
+    process.env.FIREBASE_CLIENT_EMAIL &&
+    process.env.FIREBASE_PRIVATE_KEY;
+  if (firebaseJson || hasFirebaseFields) {
+    try {
+      const { createFirebaseDb } = require("./db-firebase");
+      const db = await createFirebaseDb();
+      console.log("[db] Firebase Firestore 已连接（账号、好友与聊天记录持久保存）");
+      return db;
+    } catch (e) {
+      if (process.env.FIREBASE_STRICT === "1") throw e;
+      console.warn(
+        "[db] Firebase 不可用，自动回退到下一存储（MongoDB / PostgreSQL / SQLite）。",
+        e && e.message
+      );
+    }
+  }
+
   const mongoUri = resolveMongoUri();
   if (mongoUri) {
-    const { createMongoDb } = require("./db-mongo");
-    const db = await createMongoDb(mongoUri);
-    console.log("[db] MongoDB 已连接（账号、好友与聊天记录持久保存）");
-    return db;
+    try {
+      const { createMongoDb } = require("./db-mongo");
+      const db = await createMongoDb(mongoUri);
+      console.log("[db] MongoDB 已连接（账号、好友与聊天记录持久保存）");
+      return db;
+    } catch (e) {
+      if (process.env.MONGODB_STRICT === "1") throw e;
+      console.warn(
+        "[db] MongoDB 不可用，自动回退到下一存储（PostgreSQL / SQLite）。如需强制 Mongo 失败即退出，请设 MONGODB_STRICT=1。"
+      );
+    }
   }
 
   const pgUrl = resolvePostgresUrl();

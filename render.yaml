@@ -18,6 +18,15 @@ services:
       # 随机长字符串，用于登录 Token（必填）
       - key: JWT_SECRET
         sync: false
+      # Firebase Firestore（优先）
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_CLIENT_EMAIL
+        sync: false
+      - key: FIREBASE_PRIVATE_KEY
+        sync: false
       # 任选：PostgreSQL 的 DATABASE_URL，或 MongoDB 的 MONGODB_URI（二选一即可持久化）
       - key: DATABASE_URL
         sync: false
