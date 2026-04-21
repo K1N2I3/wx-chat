@@ -17,9 +17,47 @@ function mapUser(doc) {
   };
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+const mongoClientOpts = {
+  serverSelectionTimeoutMS: 25_000,
+  connectTimeoutMS: 20_000,
+  maxPoolSize: 10,
+};
+
 async function createMongoDb(uri) {
-  const client = new MongoClient(uri);
-  await client.connect();
+  let client;
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    client = new MongoClient(uri, mongoClientOpts);
+    try {
+      await client.connect();
+      lastErr = undefined;
+      break;
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[db] MongoDB 连接尝试 ${attempt}/3 失败:`, msg);
+      try {
+        await client.close();
+      } catch {
+        /* ignore */
+      }
+      client = undefined;
+      if (attempt < 3) await sleep(2500);
+    }
+  }
+  if (!client && lastErr) {
+    const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+    console.error(
+      "[db] MongoDB 连接失败。请检查：1) MONGODB_URI 是否正确（密码特殊字符需 URL 编码）2) Atlas → Network Access 添加 0.0.0.0/0 或 Render 出口 IP 3) 用户名与 Database User 密码",
+      "\n详情:",
+      msg
+    );
+    throw lastErr;
+  }
 
   const dbName = process.env.MONGODB_DB_NAME || "wxchat";
   const db = client.db(dbName);

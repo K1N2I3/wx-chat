@@ -399,12 +399,20 @@ async function createDb() {
   }
 
   const path = require("path");
-  const { createSqliteDb } = require("./db-sqlite");
   const sqlitePath =
     process.env.SQLITE_PATH || path.join(process.cwd(), "data", "wx.db");
-  const db = createSqliteDb(sqlitePath);
-  console.log(`[db] SQLite 文件库：${sqlitePath}（账号与聊天记录持久保存）`);
-  return db;
+  try {
+    const { createSqliteDb } = require("./db-sqlite");
+    const db = createSqliteDb(sqlitePath);
+    console.log(`[db] SQLite 文件库：${sqlitePath}（账号与聊天记录持久保存）`);
+    return db;
+  } catch (e) {
+    console.warn(
+      "[db] SQLite 不可用（常见于未安装 better-sqlite3 原生模块），回退内存库：",
+      e && e.message
+    );
+    return createMemoryDb();
+  }
 }
 
 module.exports = { createDb, convKey };
