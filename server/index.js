@@ -14,14 +14,34 @@ const {
 const app = express();
 app.use(express.json({ limit: "512kb" }));
 
-const corsOrigin =
-  process.env.CORS_ORIGIN === "*"
-    ? true
-    : (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim()).filter(Boolean);
+function normalizeOrigin(input) {
+  return String(input || "")
+    .trim()
+    .replace(/^['"]|['"]$/g, "")
+    .replace(/\/+$/, "");
+}
+
+const originRaw = process.env.CORS_ORIGIN || "";
+const allowAllOrigins = originRaw.trim() === "*" || originRaw.trim() === "";
+const allowedOrigins = allowAllOrigins
+  ? []
+  : originRaw
+      .split(",")
+      .map((s) => normalizeOrigin(s))
+      .filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (allowAllOrigins) return true;
+  if (!origin) return true;
+  const normalized = normalizeOrigin(origin);
+  return allowedOrigins.some((allowed) => normalizeOrigin(allowed) === normalized);
+}
 
 app.use(
   cors({
-    origin: corsOrigin.length ? corsOrigin : true,
+    origin(origin, cb) {
+      cb(null, isAllowedOrigin(origin));
+    },
     credentials: true,
   })
 );
@@ -323,7 +343,9 @@ createDb()
     const server = http.createServer(app);
     const io = new Server(server, {
       cors: {
-        origin: corsOrigin.length ? corsOrigin : true,
+        origin(origin, cb) {
+          cb(null, isAllowedOrigin(origin));
+        },
         methods: ["GET", "POST"],
         credentials: true,
       },
@@ -336,6 +358,9 @@ createDb()
 
     const port = Number(process.env.PORT) || 3001;
     server.listen(port, "0.0.0.0", () => {
+      console.log(
+        `[cors] ${allowAllOrigins ? "allow all origins" : `allow list: ${allowedOrigins.join(", ")}`}`
+      );
       console.log(`wx-chat server listening on ${port} (db: ${db.mode})`);
     });
   })
