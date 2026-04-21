@@ -5,6 +5,8 @@ import { io, type Socket } from "socket.io-client";
 
 const TOKEN_KEY = "wx_token";
 const USER_KEY = "wx_user";
+const LAST_PEER_KEY = "wx_last_peer";
+const DM_CACHE_PREFIX = "wx_dm_cache:";
 
 type PublicUser = { id: string; username: string; displayName: string };
 type Friend = { id: string; username: string; display_name: string };
@@ -25,6 +27,33 @@ type UiMessage = {
 };
 
 type PeerPreview = { text: string; ts: number };
+
+function dmCacheKey(meId: string, peerId: string) {
+  const [a, b] = [meId, peerId].sort();
+  return `${DM_CACHE_PREFIX}${a}:${b}`;
+}
+
+function readDmCache(meId: string, peerId: string): UiMessage[] {
+  try {
+    const raw = localStorage.getItem(dmCacheKey(meId, peerId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((m) => m && typeof m.id === "string" && typeof m.text === "string")
+      .slice(-200);
+  } catch {
+    return [];
+  }
+}
+
+function writeDmCache(meId: string, peerId: string, messages: UiMessage[]) {
+  try {
+    localStorage.setItem(dmCacheKey(meId, peerId), JSON.stringify(messages.slice(-200)));
+  } catch {
+    /* ignore */
+  }
+}
 
 function avatarChar(name: string) {
   const t = name.trim();
@@ -242,6 +271,12 @@ export function ChatApp() {
 
   useEffect(() => {
     selectedRef.current = selected;
+    try {
+      if (selected?.id) localStorage.setItem(LAST_PEER_KEY, selected.id);
+      else localStorage.removeItem(LAST_PEER_KEY);
+    } catch {
+      /* ignore */
+    }
   }, [selected]);
 
   useEffect(() => {
@@ -257,6 +292,7 @@ export function ChatApp() {
     if (!selected || messages.length === 0) return;
     const last = messages[messages.length - 1];
     bumpPreview(selected.id, last.text);
+    if (me?.id) writeDmCache(me.id, selected.id, messages);
   }, [messages, selected?.id, bumpPreview, selected]);
 
   const joinDmRoom = useCallback(
@@ -368,11 +404,28 @@ export function ChatApp() {
     (f: Friend) => {
       setSelected(f);
       selectedRef.current = f;
-      setMessages([]);
+      if (me?.id) {
+        const cached = readDmCache(me.id, f.id);
+        setMessages(cached);
+      } else {
+        setMessages([]);
+      }
       joinDmRoom(f);
     },
-    [joinDmRoom]
+    [joinDmRoom, me?.id]
   );
+
+  useEffect(() => {
+    if (!me?.id || friends.length === 0 || selectedRef.current) return;
+    try {
+      const lastPeerId = localStorage.getItem(LAST_PEER_KEY);
+      if (!lastPeerId) return;
+      const found = friends.find((f) => f.id === lastPeerId);
+      if (found) openChat(found);
+    } catch {
+      /* ignore */
+    }
+  }, [friends, me?.id, openChat]);
 
   const sendDm = useCallback(() => {
     const s = socketRef.current;
