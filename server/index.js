@@ -13,6 +13,7 @@ const {
 
 const app = express();
 app.use(express.json({ limit: "512kb" }));
+let ioRef = null;
 
 function normalizeOrigin(input) {
   return String(input || "")
@@ -221,6 +222,45 @@ function registerHttpRoutes(db) {
       res.status(500).json({ error: "拒绝失败" });
     }
   });
+
+  app.get("/api/dm/history", authMiddleware, async (req, res) => {
+    try {
+      const peerUserId = String(req.query?.peerUserId || "").trim();
+      if (!peerUserId || peerUserId === req.user.id) {
+        res.status(400).json({ error: "无效会话对象" });
+        return;
+      }
+      if (!(await db.areFriends(req.user.id, peerUserId))) {
+        res.status(403).json({ error: "仅可查看好友会话" });
+        return;
+      }
+      const [lo, hi] = [req.user.id, peerUserId].sort();
+      const rows = await db.listMessages(lo, hi, 100);
+      const history = rows.map((m) => ({
+        id: m.id,
+        text: m.body,
+        ts: Number(m.ts),
+        fromMe: m.sender_id === req.user.id,
+        readByRecipient: !!m.read_by_recipient,
+      }));
+      const changed = db.markMessagesRead
+        ? await db.markMessagesRead(req.user.id, peerUserId)
+        : 0;
+      if (changed > 0 && req.io) {
+        const readPayload = {
+          readerUserId: req.user.id,
+          peerUserId,
+          ts: Date.now(),
+        };
+        req.io.to(`user:${req.user.id}`).emit("dm_read", readPayload);
+        req.io.to(`user:${peerUserId}`).emit("dm_read", readPayload);
+      }
+      res.json({ history });
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: "加载会话失败" });
+    }
+  });
 }
 
 function dmRoomKey(a, b) {
@@ -387,6 +427,10 @@ function registerSocketIO(io, db) {
 
 createDb()
   .then((db) => {
+    app.use((req, _res, next) => {
+      req.io = ioRef;
+      next();
+    });
     app.get("/health", (_req, res) => {
       res.json({
         ok: true,
@@ -412,6 +456,7 @@ createDb()
       pingTimeout: 25000,
     });
 
+    ioRef = io;
     registerSocketIO(io, db);
 
     const port = Number(process.env.PORT) || 3001;

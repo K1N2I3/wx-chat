@@ -338,6 +338,34 @@ export function ChatApp() {
     [bumpPreview]
   );
 
+  const loadHistoryByHttp = useCallback(
+    async (peerId: string, peerName: string) => {
+      if (!token || !apiBase) return;
+      try {
+        const data = await api<{
+          history?: { id: string; text: string; ts: number; fromMe: boolean; readByRecipient?: boolean }[];
+        }>(apiBase, `/api/dm/history?peerUserId=${encodeURIComponent(peerId)}`, {
+          method: "GET",
+          token,
+        });
+        const incoming = (data.history || []).map((m) => ({
+          id: m.id,
+          text: m.text,
+          ts: m.ts,
+          fromMe: m.fromMe,
+          fromLabel: peerName,
+          readByRecipient: m.readByRecipient,
+        }));
+        setMessages((prev) => mergeMessages(prev, incoming));
+        const last = incoming[incoming.length - 1];
+        if (last) bumpPreview(peerId, last.text);
+      } catch {
+        /* ignore */
+      }
+    },
+    [apiBase, token, bumpPreview]
+  );
+
   useEffect(() => {
     if (screen !== "main" || !token || !apiBase) return;
 
@@ -440,10 +468,11 @@ export function ChatApp() {
         setMessages([]);
       }
       joinDmRoom(f);
+      loadHistoryByHttp(f.id, f.display_name);
       const s = socketRef.current;
       if (s?.connected) s.emit("mark_dm_read", { peerUserId: f.id }, () => {});
     },
-    [joinDmRoom, me?.id]
+    [joinDmRoom, loadHistoryByHttp, me?.id]
   );
 
   useEffect(() => {
