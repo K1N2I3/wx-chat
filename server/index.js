@@ -292,11 +292,13 @@ function registerSocketIO(io, db) {
           ? await db.markMessagesRead(uid, peer)
           : 0;
         if (readChanged > 0) {
-          io.to(room).emit("dm_read", {
+          const readPayload = {
             readerUserId: uid,
             peerUserId: peer,
             ts: Date.now(),
-          });
+          };
+          io.to(`user:${uid}`).emit("dm_read", readPayload);
+          io.to(`user:${peer}`).emit("dm_read", readPayload);
         }
         await emitUnreadCounts(uid);
         if (typeof cb === "function") cb({ ok: true, history });
@@ -336,8 +338,9 @@ function registerSocketIO(io, db) {
           fromDisplayName: socket.data.displayName,
           readByRecipient: false,
         };
-        const room = dmRoomKey(uid, peer);
-        io.to(room).emit("dm_message", payload);
+        // 直接投递到双方 user room，避免因 room 状态异常导致“已发送但对方收不到”
+        io.to(`user:${uid}`).emit("dm_message", payload);
+        io.to(`user:${peer}`).emit("dm_message", payload);
         await emitUnreadCounts(peer);
         await emitUnreadCounts(uid);
         if (typeof cb === "function") cb({ ok: true, id: saved.id, ts });
@@ -360,11 +363,13 @@ function registerSocketIO(io, db) {
         }
         const changed = db.markMessagesRead ? await db.markMessagesRead(uid, peer) : 0;
         if (changed > 0) {
-          io.to(dmRoomKey(uid, peer)).emit("dm_read", {
+          const readPayload = {
             readerUserId: uid,
             peerUserId: peer,
             ts: Date.now(),
-          });
+          };
+          io.to(`user:${uid}`).emit("dm_read", readPayload);
+          io.to(`user:${peer}`).emit("dm_read", readPayload);
         }
         await emitUnreadCounts(uid);
         if (typeof cb === "function") cb({ ok: true, changed });
