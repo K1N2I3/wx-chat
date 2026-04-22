@@ -361,10 +361,10 @@ function createPgDb(pool) {
     const [lo, hi] = [user_low, user_high].sort();
     const { rows } = await pool.query(
       `SELECT id::text, sender_id::text, body, (extract(epoch from created_at)*1000)::bigint as ts, read_by_recipient
-       FROM messages WHERE user_low=$1 AND user_high=$2 ORDER BY created_at ASC LIMIT $3`,
+       FROM messages WHERE user_low=$1 AND user_high=$2 ORDER BY created_at DESC LIMIT $3`,
       [lo, hi, limit]
     );
-    return rows;
+    return rows.reverse();
   }
 
   async function markMessagesRead(reader_id, peer_id) {

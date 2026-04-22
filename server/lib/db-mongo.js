@@ -262,16 +262,17 @@ async function createMongoDb(uri) {
     const [lo, hi] = [user_low, user_high].sort();
     const rows = await messages
       .find({ user_low: lo, user_high: hi })
-      .sort({ created_ms: 1 })
+      .sort({ created_ms: -1 })
       .limit(limit)
       .toArray();
-    return rows.map((m) => ({
+    const out = rows.map((m) => ({
       id: m._id,
       sender_id: m.sender_id,
       body: m.body,
       ts: m.created_ms,
       read_by_recipient: !!m.read_by_recipient,
     }));
+    return out.reverse();
   }
 
   async function markMessagesRead(reader_id, peer_id) {

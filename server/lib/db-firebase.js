@@ -190,11 +190,11 @@ async function createFirebaseDb() {
     const sub = await convCol
       .doc(cid)
       .collection("messages")
-      .orderBy("ts", "asc")
+      .orderBy("ts", "desc")
       .limit(limit)
       .get();
     if (!sub.empty) {
-      return sub.docs.map((d) => {
+      const out = sub.docs.map((d) => {
         const m = d.data();
         return {
           id: d.id,
@@ -204,6 +204,7 @@ async function createFirebaseDb() {
           read_by_recipient: !!m.read_by_recipient,
         };
       });
+      return out.reverse();
     }
 
     // 兼容旧数据：回退读取旧 messages 结构（可能需要索引）
@@ -211,10 +212,10 @@ async function createFirebaseDb() {
       const snap = await msgsCol
         .where("user_low", "==", lo)
         .where("user_high", "==", hi)
-        .orderBy("ts", "asc")
+        .orderBy("ts", "desc")
         .limit(limit)
         .get();
-      return snap.docs.map((d) => {
+      const out = snap.docs.map((d) => {
         const m = d.data();
         return {
           id: d.id,
@@ -224,6 +225,7 @@ async function createFirebaseDb() {
           read_by_recipient: !!m.read_by_recipient,
         };
       });
+      return out.reverse();
     } catch {
       return [];
     }

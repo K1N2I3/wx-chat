@@ -164,16 +164,17 @@ function createSqliteDb(filePath) {
     const rows = db
       .prepare(
         `SELECT id, sender_id, body, created_ms as ts, read_by_recipient FROM messages
-         WHERE user_low = ? AND user_high = ? ORDER BY created_ms ASC LIMIT ?`
+         WHERE user_low = ? AND user_high = ? ORDER BY created_ms DESC LIMIT ?`
       )
       .all(lo, hi, limit);
-    return rows.map((r) => ({
+    const out = rows.map((r) => ({
       id: r.id,
       sender_id: r.sender_id,
       body: r.body,
       ts: r.ts,
       read_by_recipient: !!r.read_by_recipient,
     }));
+    return out.reverse();
   }
 
   async function markMessagesRead(reader_id, peer_id) {
